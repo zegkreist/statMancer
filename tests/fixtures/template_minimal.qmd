@@ -1,0 +1,31 @@
+---
+title: "Teste de Renderização"
+format:
+  html:
+    embed-resources: true
+params:
+  dados_rds: "dados.rds"
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(data.table)
+dados <- readRDS(params$dados_rds)
+```
+
+**Título:** `r dados$titulo`
+
+**AUC:** `r round(dados$metricas$auc, 4)`
+
+**KS:** `r round(dados$metricas$ks, 4)`
+
+**Gini:** `r round(dados$metricas$gini, 4)`
+
+**Observações treino:** `r dados$n_treino`
+
+**Observações teste:** `r dados$n_teste`
+
+**Features:** `r length(dados$features)`

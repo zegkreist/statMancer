@@ -1,0 +1,327 @@
+---
+title: "Relatório de Modelo Preditivo"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-title: "Sumário"
+    number-sections: false
+    code-fold: true
+    embed-resources: true
+    fig-width: 9
+    fig-height: 5
+    df-print: kable
+params:
+  dados_rds: "dados_relatorio.rds"
+execute:
+  warning: false
+  message: false
+  echo: false
+---
+
+```{r setup}
+#| include: false
+library(data.table)
+library(ggplot2)
+library(knitr)
+
+dados <- readRDS(params$dados_rds)
+
+# Paleta de cores consistente
+COR_POS    <- "#2196F3"
+COR_NEG    <- "#F44336"
+COR_ACCENT <- "#4CAF50"
+COR_LIFT   <- "#FF9800"
+TEMA       <- theme_minimal(base_size = 13) +
+              theme(plot.title    = element_text(face = "bold"),
+                    plot.subtitle = element_text(color = "gray50"))
+```
+
+# `r dados$titulo`
+
+> `r if (nzchar(dados$descricao)) dados$descricao else "Relatório de avaliação de modelo preditivo."`
+
+**Gerado em:** `r format(dados$data_geracao, "%d/%m/%Y às %H:%M")`
+
+---
+
+## Sumário Executivo
+
+```{r metricas-cards}
+#| column: page
+metricas <- dados$metricas
+
+cards <- data.frame(
+  Métrica = c("AUC", "KS", "Gini", "Precision", "Recall", "F1", "Accuracy"),
+  Valor   = c(
+    sprintf("%.4f", metricas$auc),
+    sprintf("%.4f", metricas$ks),
+    sprintf("%.4f", metricas$gini),
+    sprintf("%.4f", metricas$precision),
+    sprintf("%.4f", metricas$recall),
+    sprintf("%.4f", metricas$f1),
+    sprintf("%.4f", metricas$accuracy)
+  ),
+  Avaliação = c(
+    ifelse(metricas$auc >= 0.8, "✅ Bom", ifelse(metricas$auc >= 0.7, "⚠️ Razoável", "❌ Fraco")),
+    ifelse(metricas$ks  >= 0.3, "✅ Bom", ifelse(metricas$ks  >= 0.2, "⚠️ Razoável", "❌ Fraco")),
+    ifelse(metricas$gini >= 0.6,"✅ Bom", ifelse(metricas$gini >= 0.4,"⚠️ Razoável","❌ Fraco")),
+    "—", "—", "—", "—"
+  )
+)
+
+kable(cards, align = c("l", "r", "c"),
+      caption = paste0("Threshold de classificação: 0.5 | ",
+                       "N teste: ", format(metricas$n_total, big.mark = "."),
+                       " | Taxa de eventos: ",
+                       sprintf("%.1f%%", metricas$taxa_evento * 100)))
+```
+
+---
+
+## Dados
+
+### Conjuntos de Treino e Teste
+
+```{r data-overview}
+resumo_dados <- data.frame(
+  Conjunto        = c("Treino", "Teste"),
+  `N registros`   = c(format(dados$n_treino,     big.mark = "."),
+                       format(dados$n_teste,      big.mark = ".")),
+  `N IDs únicos`  = c(format(dados$n_ids_treino, big.mark = "."),
+                       format(dados$n_ids_teste,  big.mark = ".")),
+  `Taxa de evento`= c(sprintf("%.2f%%", dados$taxa_evento_treino * 100),
+                       sprintf("%.2f%%", dados$taxa_evento_teste  * 100)),
+  check.names = FALSE
+)
+kable(resumo_dados, align = c("l", "r", "r", "r"))
+```
+
+### Distribuição do Target
+
+```{r target-dist}
+dist_join <- rbind(
+  cbind(dados$dist_target_treino, conjunto = "Treino"),
+  cbind(dados$dist_target_teste,  conjunto = "Teste")
+)
+dist_join[, target := factor(target, labels = c("Negativo (0)", "Positivo (1)"))]
+
+ggplot(dist_join, aes(x = conjunto, y = prop, fill = target)) +
+  geom_col(position = "dodge", width = 0.6, alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%\nn=%s", prop * 100, format(N, big.mark = "."))),
+            position = position_dodge(width = 0.6),
+            vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = c("Negativo (0)" = COR_NEG, "Positivo (1)" = COR_POS),
+                    name   = "Classe") +
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+  labs(title = "Distribuição do Target por Conjunto",
+       x = NULL, y = "Proporção") +
+  TEMA
+```
+
+---
+
+## Busca Estatística de Variáveis
+
+```{r stats-search}
+if (!is.null(dados$busca_estatistica) && nrow(dados$busca_estatistica) > 0) {
+  top_n <- min(15L, nrow(dados$busca_estatistica))
+  busca <- dados$busca_estatistica[1:top_n]
+
+  # Tabela
+  tbl_busca <- busca[, .(
+    Variável       = variavel,
+    Tipo           = tipo_variavel,
+    Teste          = teste,
+    `Estatística`  = round(estatistica, 4),
+    `P-valor`      = ifelse(p_valor < 0.001, "< 0.001", sprintf("%.4f", p_valor)),
+    Relevância     = round(relevancia, 4),
+    Significativa  = ifelse(significativa, "✅", "❌")
+  )]
+  kable(tbl_busca,
+        caption = paste0("Top ", top_n, " variáveis ordenadas por p-valor crescente"))
+} else {
+  cat("*Busca estatística não executada ou sem resultados.*")
+}
+```
+
+```{r stats-search-plot}
+if (!is.null(dados$busca_estatistica) && nrow(dados$busca_estatistica) > 0) {
+  top_n  <- min(15L, nrow(dados$busca_estatistica))
+  busca  <- dados$busca_estatistica[1:top_n]
+
+  ggplot(busca, aes(x = reorder(variavel, relevancia), y = relevancia,
+                    fill = tipo_variavel)) +
+    geom_col(alpha = 0.85) +
+    coord_flip() +
+    scale_fill_manual(values = c("numerica"   = COR_POS,
+                                 "categorica" = COR_LIFT),
+                      name = "Tipo") +
+    labs(title    = "Relevância das Variáveis",
+         subtitle = "Tamanho de efeito (D de KS / V de Cramér / |r| / η²)",
+         x = NULL, y = "Relevância") +
+    TEMA
+}
+```
+
+---
+
+## Performance do Modelo
+
+### Curva ROC
+
+```{r roc-plot}
+auc_label <- sprintf("AUC = %.4f  |  Gini = %.4f",
+                     dados$metricas$auc, dados$metricas$gini)
+
+ggplot(dados$curva_roc, aes(x = fpr, y = tpr)) +
+  geom_line(color = COR_POS, linewidth = 1.1) +
+  geom_ribbon(aes(ymin = 0, ymax = tpr), fill = COR_POS, alpha = 0.1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  annotate("text", x = 0.65, y = 0.15, label = auc_label,
+           size = 4, color = "gray30") +
+  scale_x_continuous(labels = scales::percent_format()) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title    = "Curva ROC",
+       subtitle = "Linha tracejada = classificador aleatório",
+       x = "Taxa de Falsos Positivos (FPR)",
+       y = "Taxa de Verdadeiros Positivos (TPR)") +
+  coord_equal() +
+  TEMA
+```
+
+### Distribuição dos Scores
+
+```{r score-dist}
+pred_dt <- dados$predicoes
+pred_dt[, classe := factor(get(dados$var_target),
+                            levels = c(0, 1),
+                            labels = c("Negativo (0)", "Positivo (1)"))]
+
+ggplot(pred_dt, aes(x = predito, fill = classe, color = classe)) +
+  geom_density(alpha = 0.45, linewidth = 0.8) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray40") +
+  scale_fill_manual(values  = c("Negativo (0)" = COR_NEG, "Positivo (1)" = COR_POS),
+                    name    = "Classe") +
+  scale_color_manual(values = c("Negativo (0)" = COR_NEG, "Positivo (1)" = COR_POS),
+                     guide  = "none") +
+  annotate("text", x = 0.52, y = Inf, vjust = 2,
+           label = "threshold 0.5", size = 3.5, color = "gray40") +
+  labs(title    = "Distribuição dos Scores por Classe",
+       subtitle = "Maior separação entre as curvas = melhor discriminação",
+       x = "Score predito",
+       y = "Densidade") +
+  TEMA
+```
+
+### Tabela de Decis
+
+```{r decile-table}
+tbl_d <- dados$tabela_decis[, .(
+  Decil           = decil,
+  N               = format(n,   big.mark = "."),
+  `N Positivos`   = format(n_pos, big.mark = "."),
+  `Taxa Evento`   = sprintf("%.2f%%", taxa_evento  * 100),
+  Lift            = sprintf("%.2f",   lift),
+  `Captura`       = sprintf("%.2f%%", captura      * 100),
+  `Captura Acum.` = sprintf("%.2f%%", captura_acum * 100),
+  `Score Médio`   = sprintf("%.3f",   score_medio)
+)]
+kable(tbl_d, align = c("c", rep("r", 7)),
+      caption = "Decil 1 = maior score predito")
+```
+
+### Gráfico de Lift por Decil
+
+```{r lift-plot}
+ggplot(dados$tabela_decis, aes(x = decil, y = lift)) +
+  geom_col(fill = COR_LIFT, alpha = 0.85, width = 0.7) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = COR_NEG, linewidth = 0.8) +
+  geom_text(aes(label = sprintf("%.2f", lift)),
+            vjust = -0.4, size = 3.5, fontface = "bold") +
+  scale_x_continuous(breaks = seq_len(max(dados$tabela_decis$decil))) +
+  annotate("text", x = max(dados$tabela_decis$decil) * 0.7,
+           y = 1.07, label = "lift = 1 (aleatório)", color = COR_NEG, size = 3.5) +
+  labs(title    = "Lift por Decil",
+       subtitle = "Decil 1 = segmento de maior score (mais propenso ao evento)",
+       x = "Decil", y = "Lift") +
+  TEMA
+```
+
+### Captura Acumulada
+
+```{r capture-plot}
+ggplot(dados$tabela_decis, aes(x = decil, y = captura_acum)) +
+  geom_line(color = COR_POS, linewidth = 1.1) +
+  geom_point(color = COR_POS, size = 3) +
+  geom_text(aes(label = sprintf("%.0f%%", captura_acum * 100)),
+            vjust = -0.8, size = 3.2) +
+  geom_abline(slope = 1 / max(dados$tabela_decis$decil), intercept = 0,
+              linetype = "dashed", color = "gray50") +
+  scale_x_continuous(breaks = seq_len(max(dados$tabela_decis$decil))) +
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1.1)) +
+  labs(title    = "Curva de Captura Acumulada",
+       subtitle = "Linha tracejada = seleção aleatória",
+       x = "Decil", y = "% de Positivos Capturados") +
+  TEMA
+```
+
+---
+
+## Importância das Features
+
+```{r importance-plot}
+n_feat <- min(20L, nrow(dados$importancia))
+imp    <- dados$importancia[seq_len(n_feat)]
+
+ggplot(imp, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_col(fill = COR_ACCENT, alpha = 0.85) +
+  geom_text(aes(label = sprintf("%.4f", Gain)), hjust = -0.1, size = 3.2) +
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
+  labs(title    = paste0("Top ", n_feat, " Features por Gain"),
+       subtitle = "Gain = contribuição média para a redução de impureza",
+       x = NULL, y = "Gain") +
+  TEMA
+```
+
+```{r importance-table}
+kable(dados$importancia[seq_len(min(20L, nrow(dados$importancia))),
+                         .(Feature,
+                           Gain     = round(Gain,     5),
+                           Cover    = round(Cover,    5),
+                           Frequency = round(Frequency, 5))],
+      caption = "Importância das 20 principais features")
+```
+
+---
+
+## Parâmetros do Modelo
+
+```{r params-table}
+params_df <- data.frame(
+  Parâmetro = names(dados$params_modelo),
+  Valor     = as.character(unlist(dados$params_modelo)),
+  stringsAsFactors = FALSE
+)
+
+# Adiciona nrounds
+params_df <- rbind(
+  data.frame(Parâmetro = "nrounds",   Valor = as.character(dados$nrounds)),
+  data.frame(Parâmetro = "n_features", Valor = as.character(length(dados$features))),
+  params_df
+)
+
+kable(params_df, align = c("l", "r"),
+      caption = "Configuração do modelo XGBoost")
+```
+
+```{r features-list}
+cat("**Features utilizadas:**\n\n")
+cat(paste(paste0("`", dados$features, "`"), collapse = " · "))
+```
+
+---
+
+*Relatório gerado com [statMancer](https://github.com/statMancer) — `r format(dados$data_geracao, "%Y")`*
