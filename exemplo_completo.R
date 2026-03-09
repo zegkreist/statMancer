@@ -52,7 +52,7 @@ cat("╚════════════════════════
 cat("── 1. Gerando dados sintéticos ────────────────────────\n")
 set.seed(2025)
 
-N_TOTAL  <- 2000L
+N_TOTAL  <- 20000L
 N_POS    <- 400L   # 20% de positivos (desbalanceado)
 N_NEG    <- N_TOTAL - N_POS
 
@@ -163,9 +163,10 @@ cat(sprintf("   Treino balanceado: %s obs | Positivos: %.0f%% | Negativos: %.0f%
             100 * treino_bal[, mean(target == 0)]))
 
 
-# ── 5. Treino do Ensemble XGBoost ────────────────────────────────────────────
-cat("── 5. Treinando ensemble XGBoost (10 modelos) ─────────\n")
+# ── 5. Busca de Hiperparâmetros (MBO Bayesiano + CV) ─────────────────────────
+cat("── 5. Busca de hiperparâmetros via MBO Bayesiano (+ CV interno) ──\n")
 
+# Parâmetros de partida — usados como fallback se MBO falhar
 params_xgb <- list(
   objective        = "binary:logistic",
   eval_metric      = "auc",
@@ -178,13 +179,56 @@ params_xgb <- list(
   grow_policy      = "lossguide",
   tree_method      = "hist"
 )
+nrounds_xgb <- 150L
+
+# MBO exige features numéricas: codifica categóricas, remove id
+dt_mbo     <- data.table::copy(treino_bal)
+dt_mbo[, id := NULL]
+enc_mbo    <- codificar_categoricas(dt_mbo, setdiff(names(dt_mbo), "target"))
+dt_mbo_enc <- enc_mbo$X
+dt_mbo_enc[, target := dt_mbo$target]
+
+resultado_mbo <- tryCatch(
+  busca_parametros_mlrmbo(
+    dados           = dt_mbo_enc,
+    target_col      = "target",
+    n_samples       = 600L,
+    colunas_excluir = NULL,
+    metrica         = "auc",
+    objetivo        = "binary:logistic",
+    niter_data      = 3L,   # sessões de reamostragem
+    niter_bayes     = 10L,  # iterações bayesianas por sessão
+    cv_folds        = 3L,
+    cv_nrounds      = 200L,
+    nthreads        = 1L,
+    verbose         = FALSE
+  ),
+  error = function(e) list(sucesso = FALSE, erro = conditionMessage(e))
+)
+
+if (isTRUE(resultado_mbo$sucesso)) {
+  p_mbo <- resultado_mbo$melhor_parametros
+  # p_mbo$parametros já inclui objective / eval_metric / grow_policy / tree_method
+  params_xgb  <- p_mbo$parametros
+  nrounds_xgb <- p_mbo$nrounds
+  cat(sprintf("   AUC-CV best : %.4f\n", resultado_mbo$auc))
+  cat(sprintf("   eta=%.4f  max_leaves=%d  nrounds=%d\n",
+              params_xgb$eta, params_xgb$max_leaves, nrounds_xgb))
+} else {
+  cat("   \u26a0  mlrMBO indisponível — usando parâmetros padrão\n")
+}
+cat("\n")
+
+
+# ── 6. Treino do Ensemble XGBoost ────────────────────────────────────────────
+cat("── 6. Treinando ensemble XGBoost (10 modelos) com params otimizados ─\n")
 
 ensemble <- xgb_treino_ensemble(
   dt                    = treino_bal,
   var_id                = "id",
   var_target            = "target",
   vars_excluir          = NULL,   # todas as categóricas entram como features
-  parametros_treino     = list(parametros = params_xgb, nrounds = 150L),
+  parametros_treino     = list(parametros = params_xgb, nrounds = nrounds_xgb),
   n_models              = 10L,
   metodo_reamostragem   = "upsample",
   folder_saida          = file.path(output_dir, "ensemble"),
@@ -200,8 +244,8 @@ cat(sprintf("   Features: %d | Pasta: %s\n\n",
             ensemble$folder_saida))
 
 
-# ── 6. Predição com o Ensemble no Teste ──────────────────────────────────────
-cat("── 6. Predizendo com ensemble no conjunto de teste ─────\n")
+# ── 7. Predição com o Ensemble no Teste ──────────────────────────────────────
+cat("── 7. Predizendo com ensemble no conjunto de teste ─────\n")
 
 # xgb_prever_ensemble usa o factor_map do treino para codificação consistente
 preds_ensemble <- xgb_prever_ensemble(
@@ -225,8 +269,8 @@ cat(sprintf("   Score médio positivos: %.3f\n", dt_avaliacao[target == 1, mean(
 cat(sprintf("   Score médio negativos: %.3f\n\n", dt_avaliacao[target == 0, mean(predito)]))
 
 
-# ── 7. Métricas de Avaliação ─────────────────────────────────────────────────
-cat("── 7. Métricas de avaliação ───────────────────────────\n")
+# ── 8. Métricas de Avaliação ─────────────────────────────────────────────────
+cat("── 8. Métricas de avaliação ───────────────────────────\n")
 
 metricas <- metricas_binario(dt_avaliacao,
                              var_pred   = "predito",
@@ -247,20 +291,20 @@ cat(paste(sprintf("D%d=%.2f", decis$decil, decis$lift), collapse = " | "))
 cat("\n\n")
 
 
-# ── 8. K-Fold Cross-Validation (demonstração) ────────────────────────────────
-cat("── 8. K-Fold (5 folds) — AUC por fold ────────────────\n")
+# ── 9. K-Fold Cross-Validation (demonstração) ────────────────────────────────
+cat("── 9. K-Fold (5 folds) — AUC por fold com params ótimos ─\n")
 
 folds <- kfold_split(dados, var_id = "id", k = 5L,
                      var_estratificacao = "target", seed = 42L)
 
 aucs_cv <- sapply(folds, function(fold) {
-  # Treinar no treino do fold (sem balanceamento para ser rápido)
+  # Treinar no treino do fold com os params otimizados pelo MBO
   m_fold <- xgb_train(
     dt_treino    = fold$treino,
     var_target   = "target",
-    vars_excluir = c("id", "regiao"),
+    vars_excluir = c("id"),
     params       = params_xgb,
-    nrounds      = 50L,
+    nrounds      = min(nrounds_xgb, 80L),
     verbose      = FALSE
   )
   # Prever no teste do fold
@@ -274,8 +318,8 @@ cat(sprintf("   AUC por fold:  %s\n",
 cat(sprintf("   AUC médio: %.4f (±%.4f)\n\n", mean(aucs_cv), sd(aucs_cv)))
 
 
-# ── 9. Relatório Quarto ──────────────────────────────────────────────────────
-cat("── 9. Gerando relatório HTML ──────────────────────────\n")
+# ── 10. Relatório Quarto ─────────────────────────────────────────────────────
+cat("── 10. Gerando relatório HTML ─────────────────────────\n")
 
 dados_rds <- file.path(output_dir, "dados_relatorio.rds")
 
