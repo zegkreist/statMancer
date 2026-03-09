@@ -8,3 +8,5 @@ input/bq-results-20260302-175558-1772474248343.csv
 *.html
 
 output/ensemble/
+
+allu.R
