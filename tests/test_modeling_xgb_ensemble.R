@@ -31,6 +31,7 @@ suppressPackageStartupMessages({
   }
 )
 
+source(file.path(.proj_root, "R", "utils",    "utils_categoricas.R"))
 source(file.path(.proj_root, "R", "utils",    "utils_modelagem.R"))
 source(file.path(.proj_root, "R", "sampling", "sampling_balance.R"))
 # modeling_xgb_ensemble.R define xgb_treino_ensemble (sobrescreve a versão S3 de utils_modelagem)

@@ -40,6 +40,7 @@ suppressPackageStartupMessages({
   }
 )
 
+source(file.path(.proj_root, "R", "utils",     "utils_categoricas.R"))
 source(file.path(.proj_root, "R", "modeling",   "modeling_xgb_train.R"))
 source(file.path(.proj_root, "R", "reporting",  "reporting_metrics.R"))
 source(file.path(.proj_root, "R", "reporting",  "reporting_render.R"))

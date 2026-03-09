@@ -9,12 +9,20 @@ suppressPackageStartupMessages({
   library(xgboost)
 })
 
-source(file.path(dirname(dirname(rstudioapi::getSourceEditorContext()$path)),
-                 "R", "modeling", "modeling_xgb_train.R"))
-source(file.path(dirname(dirname(rstudioapi::getSourceEditorContext()$path)),
-                 "R", "modeling", "modeling_xgb_predict.R"))
-source(file.path(dirname(rstudioapi::getSourceEditorContext()$path),
-                 "helpers", "synthetic_data.R"))
+.proj_root <- tryCatch(
+  dirname(dirname(rstudioapi::getSourceEditorContext()$path)),
+  error = function(e) {
+    args <- commandArgs(trailingOnly = FALSE)
+    f    <- args[grepl("--file=", args)]
+    if (length(f) > 0) dirname(dirname(sub("--file=", "", f)))
+    else getwd()
+  }
+)
+
+source(file.path(.proj_root, "R", "utils",    "utils_categoricas.R"))
+source(file.path(.proj_root, "R", "modeling", "modeling_xgb_train.R"))
+source(file.path(.proj_root, "R", "modeling", "modeling_xgb_predict.R"))
+source(file.path(.proj_root, "tests", "helpers", "synthetic_data.R"))
 
 .assert <- function(condicao, msg) {
   if (!condicao) stop(paste0("[FAIL] ", msg))

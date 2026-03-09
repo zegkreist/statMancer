@@ -140,3 +140,74 @@ sintetico_multiplos_registros <- function(n_ids          = 300,
 
   data.table::rbindlist(lista_ids)
 }
+
+
+# ─── binário com categóricas ──────────────────────────────────────────────────
+
+#' Dados sintéticos para classificação binária com variáveis categóricas
+#'
+#' Inclui variáveis \code{factor} e \code{character} com sinal real em relação
+#' ao target, além das variáveis numéricas usuais.
+#'
+#' @param n_pos  Tamanho da classe positiva. DEFAULT: 200.
+#' @param n_neg  Tamanho da classe negativa. DEFAULT: 800.
+#' @param seed   Semente. DEFAULT: 42.
+#'
+#' @return data.table com colunas:
+#'   \code{id}, \code{target},
+#'   \code{sexo} (factor, COM sinal),
+#'   \code{canal} (factor, COM sinal),
+#'   \code{faixa_risco} (character, COM sinal),
+#'   \code{regiao} (factor, sem sinal),
+#'   \code{score_a} (numérica, COM sinal),
+#'   \code{score_b} (numérica, sinal fraco),
+#'   \code{score_ruido} (numérica, sem sinal),
+#'   \code{idade} (inteira, sinal leve).
+#' @noRd
+sintetico_binario_categorico <- function(n_pos = 200, n_neg = 800, seed = 42) {
+  set.seed(seed)
+  n <- n_pos + n_neg
+
+  data.table::data.table(
+    id     = seq_len(n),
+    target = c(rep(1L, n_pos), rep(0L, n_neg)),
+
+    # ── Categóricas COM sinal (factor) ────────────────────────────────────
+    # Positivos: maioria "M"; negativos: maioria "F"
+    sexo = factor(c(
+      sample(c("M", "F"), n_pos, replace = TRUE, prob = c(0.70, 0.30)),
+      sample(c("M", "F"), n_neg, replace = TRUE, prob = c(0.35, 0.65))
+    )),
+
+    # Positivos: preferem "app"/"online"; negativos: preferem "loja"/"telefone"
+    canal = factor(c(
+      sample(c("app", "online", "loja", "telefone"), n_pos,
+             replace = TRUE, prob = c(0.50, 0.30, 0.10, 0.10)),
+      sample(c("app", "online", "loja", "telefone"), n_neg,
+             replace = TRUE, prob = c(0.15, 0.20, 0.35, 0.30))
+    )),
+
+    # Character (não factor), COM sinal
+    # Positivos: maioria "alto" e "medio"; negativos: maioria "baixo"
+    faixa_risco = c(
+      sample(c("alto", "medio", "baixo"), n_pos,
+             replace = TRUE, prob = c(0.60, 0.30, 0.10)),
+      sample(c("alto", "medio", "baixo"), n_neg,
+             replace = TRUE, prob = c(0.15, 0.35, 0.50))
+    ),
+
+    # ── Categórica SEM sinal (factor) ─────────────────────────────────────
+    regiao = factor(
+      sample(c("norte", "sul", "leste", "oeste"), n, replace = TRUE)
+    ),
+
+    # ── Numéricas ─────────────────────────────────────────────────────────
+    score_a     = c(stats::rnorm(n_pos, mean = 75, sd = 10),
+                    stats::rnorm(n_neg, mean = 50, sd = 15)),
+    score_b     = c(stats::rnorm(n_pos, mean = 60, sd = 8),
+                    stats::rnorm(n_neg, mean = 55, sd = 12)),
+    score_ruido = stats::rnorm(n, mean = 50, sd = 20),
+    idade       = sample(18L:80L, n, replace = TRUE)
+  )
+}
+

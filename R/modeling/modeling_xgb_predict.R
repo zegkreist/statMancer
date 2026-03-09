@@ -29,8 +29,10 @@ xgb_predict <- function(modelo_obj, dt_novo, var_id = NULL) {
       "Features ausentes em dt_novo: ", paste(features_faltando, collapse = ", ")
     ))
 
-  X     <- dt_novo[, features, with = FALSE]
-  X     <- X[, lapply(.SD, as.numeric)]
+  # Aplica o mapeamento de níveis do treino para codificação consistente
+  enc   <- codificar_categoricas(dt_novo, features,
+                                 factor_map = modelo_obj$factor_map)
+  X     <- enc$X[, lapply(.SD, as.numeric)]
   dtest <- xgboost::xgb.DMatrix(as.matrix(X))
   preds <- predict(modelo_obj$modelo, dtest)
 

@@ -6,8 +6,17 @@
 
 suppressPackageStartupMessages(library(data.table))
 
-source(file.path(dirname(dirname(rstudioapi::getSourceEditorContext()$path)),
-                 "R", "reporting", "reporting_metrics.R"))
+.proj_root <- tryCatch(
+  dirname(dirname(rstudioapi::getSourceEditorContext()$path)),
+  error = function(e) {
+    args <- commandArgs(trailingOnly = FALSE)
+    f    <- args[grepl("--file=", args)]
+    if (length(f) > 0) dirname(dirname(sub("--file=", "", f)))
+    else getwd()
+  }
+)
+
+source(file.path(.proj_root, "R", "reporting", "reporting_metrics.R"))
 
 .assert <- function(condicao, msg) {
   if (!condicao) stop(paste0("[FAIL] ", msg))

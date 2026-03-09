@@ -6,10 +6,18 @@
 suppressPackageStartupMessages(library(data.table))
 
 # ── Setup: carregar funções e dados ──────────────────────────────────────────
-source(file.path(dirname(dirname(rstudioapi::getSourceEditorContext()$path)),
-                 "R", "sampling", "sampling_balance.R"))
-source(file.path(dirname(rstudioapi::getSourceEditorContext()$path),
-                 "helpers", "synthetic_data.R"))
+.proj_root <- tryCatch(
+  dirname(dirname(rstudioapi::getSourceEditorContext()$path)),
+  error = function(e) {
+    args <- commandArgs(trailingOnly = FALSE)
+    f    <- args[grepl("--file=", args)]
+    if (length(f) > 0) dirname(dirname(sub("--file=", "", f)))
+    else getwd()
+  }
+)
+
+source(file.path(.proj_root, "R", "sampling", "sampling_balance.R"))
+source(file.path(.proj_root, "tests", "helpers", "synthetic_data.R"))
 
 # Helper de asserção com mensagem
 .assert <- function(condicao, msg) {

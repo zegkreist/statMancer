@@ -135,8 +135,9 @@ test_cv_folds_retorna_k <- function() {
 # T10: união dos folds cobre todas as linhas
 test_cv_folds_cobertura_total <- function() {
   folds   <- criar_cv_folds(.dt_folds, k_folds = 5, seed = 42)
-  all_idx <- sort(unlist(folds))
-  .assert(identical(all_idx, 1:nrow(.dt_folds)), "União dos folds deve cobrir todas as linhas")
+  all_idx <- sort(as.integer(unlist(folds)))
+  .assert(identical(all_idx, seq_len(nrow(.dt_folds))),
+          "União dos folds deve cobrir todas as linhas")
   cat("PASS: test_cv_folds_cobertura_total\n\n")
 }
 

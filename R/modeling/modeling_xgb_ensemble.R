@@ -204,6 +204,12 @@ xgb_treino_ensemble <- function(
   if (length(colunas_features) == 0L)
     stop("[ERRO] Nenhuma feature disponível após exclusões.")
 
+  # ── Mapeamento de níveis categóricos (treino) ──────────────────────────────
+  # Calculado UMA vez a partir do dataset completo para garantir codificação
+  # consistente em todas as iterações do ensemble e durante a predição.
+  enc_base          <- codificar_categoricas(dt, colunas_features)
+  factor_map_treino <- enc_base$factor_map
+
   cat(paste0("[ENSEMBLE] Método: ", metodo_reamostragem,
              " | Modelos: ", n_models,
              " | Features: ", length(colunas_features), "\n"))
@@ -266,15 +272,17 @@ xgb_treino_ensemble <- function(
 
     if (nrow(treino_dt) == 0L) next
 
-    # ── Preparação para XGBoost ───────────────────────────────────────────────
-    treino_num <- converter_para_numerico_seguro(treino_dt[, ..colunas_features])
+    # ── Preparação para XGBoost ────────────────────────────────────────
+    enc_treino <- codificar_categoricas(treino_dt, colunas_features, factor_map_treino)
+    treino_num <- enc_treino$X[, lapply(.SD, as.numeric)]
     y_treino   <- as.numeric(treino_dt[[var_target]])
 
     dtrain    <- xgboost::xgb.DMatrix(as.matrix(treino_num), label = y_treino)
     watchlist <- list(train = dtrain)
 
     if (!is.null(val_dt) && nrow(val_dt) > 0L) {
-      val_num <- converter_para_numerico_seguro(val_dt[, ..colunas_features])
+      enc_val <- codificar_categoricas(val_dt, colunas_features, factor_map_treino)
+      val_num <- enc_val$X[, lapply(.SD, as.numeric)]
       y_val   <- as.numeric(val_dt[[var_target]])
       dval    <- xgboost::xgb.DMatrix(as.matrix(val_num), label = y_val)
       watchlist$eval <- dval
@@ -369,6 +377,8 @@ xgb_treino_ensemble <- function(
       validation_split      = validation_split,
       seed                  = seed,
       nthreads              = nthreads,
+      # Mapeamento de níveis categóricos para predição consistente
+      factor_map            = factor_map_treino,
       # Alias para compatibilidade com xgb_predict_ensemble()
       coluna_id             = var_id,
       colunas_excluir       = cols_excluir_total
@@ -488,4 +498,74 @@ salvar_ensemble <- function(resultado, folder_destino) {
              " arquivo(s) copiado(s) para: ", folder_destino, "\n"))
 
   invisible(folder_destino)
+}
+
+
+# ─── xgb_prever_ensemble ─────────────────────────────────────────────────────
+
+#' @title Predição com ensemble XGBoost com suporte a categóricas
+#'
+#' @description Gera predições a partir de um objeto retornado por
+#' \code{xgb_treino_ensemble()}, utilizando o \code{factor_map} armazenado nos
+#' metadados para codificar variáveis categóricas de forma consistente com o
+#' treino.
+#'
+#' @param dados_novos       \code{data.table} com os dados para predição.
+#' @param ensemble_obj      Objeto retornado por \code{xgb_treino_ensemble()}
+#'                          ou \code{carregar_ensemble()}.
+#' @param metodo_combinacao \code{"media"} (padrão) ou \code{"mediana"}.
+#' @param retornar_com_id   Se \code{TRUE} (padrão), retorna
+#'                          \code{data.table(id, predicao)}.
+#' @param nthreads          Threads para XGBoost. DEFAULT: \code{1L}.
+#' @param verbose           Mostrar log. DEFAULT: \code{FALSE}.
+#'
+#' @return Vetor numérico de predições ou \code{data.table(id, predicao)}.
+#'
+#' @note Requer que \code{R/utils/utils_categoricas.R} já tenha sido carregado.
+#'
+#' @export
+xgb_prever_ensemble <- function(dados_novos,
+                                ensemble_obj,
+                                metodo_combinacao = "media",
+                                retornar_com_id   = TRUE,
+                                nthreads          = 1L,
+                                verbose           = FALSE) {
+
+  if (!is.list(ensemble_obj) ||
+      !all(c("modelos", "metadata", "folder_saida") %in% names(ensemble_obj)))
+    stop("[ERRO] ensemble_obj deve ser o retorno de xgb_treino_ensemble() ou carregar_ensemble()")
+
+  if (!metodo_combinacao %in% c("media", "mediana"))
+    stop(paste0("[ERRO] metodo_combinacao deve ser 'media' ou 'mediana', recebido: '",
+                metodo_combinacao, "'"))
+
+  data.table::setDT(dados_novos)
+
+  cfg      <- ensemble_obj$metadata$training_config
+  features <- cfg$colunas_features
+  var_id   <- cfg$var_id
+
+  # Codifica categóricas usando o factor_map do treino
+  enc  <- codificar_categoricas(dados_novos, features,
+                                factor_map = cfg$factor_map)
+  X    <- enc$X[, lapply(.SD, as.numeric)]
+  dmat <- xgboost::xgb.DMatrix(as.matrix(X))
+
+  preds_list <- lapply(ensemble_obj$modelos, function(m) {
+    predict(m, dmat)
+  })
+
+  if (metodo_combinacao == "media") {
+    pred_final <- Reduce("+", preds_list) / length(preds_list)
+  } else {
+    pred_final <- apply(do.call(cbind, preds_list), 1, stats::median)
+  }
+
+  if (retornar_com_id && !is.null(var_id) && var_id %in% names(dados_novos)) {
+    result <- data.table::data.table(id = dados_novos[[var_id]], predicao = pred_final)
+    data.table::setnames(result, "id", var_id)
+    return(result)
+  }
+
+  pred_final
 }

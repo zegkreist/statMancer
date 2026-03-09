@@ -499,7 +499,7 @@ criar_cv_folds <- function(dados, k_folds = 5, seed = 123) {
 #' @return Valor AUC
 calculate_auc <- function(target, predictions) {
   if(requireNamespace("pROC", quietly = TRUE)) {
-    auc_val <- pROC::auc(target, predictions, quiet = TRUE)
+    auc_val <- pROC::auc(target, predictions, direction = "<", quiet = TRUE)
     return(as.numeric(auc_val))
   } else {
     # Implementação simples sem pROC

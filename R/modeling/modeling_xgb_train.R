@@ -21,9 +21,15 @@
 #' @return Uma lista com:
 #'   \item{\code{$modelo}}{Objeto \code{xgb.Booster} treinado.}
 #'   \item{\code{$features}}{Nomes das features usadas (na ordem do treino).}
+#'   \item{\code{$factor_map}}{Mapeamento de níveis das variáveis categóricas.
+#'                              Necessário para codificação consistente em predição.}
 #'   \item{\code{$params}}{Parâmetros utilizados.}
 #'   \item{\code{$nrounds}}{Número de rounds utilizado.}
 #'   \item{\code{$var_target}}{Nome da coluna target.}
+#'
+#' @note Requer que \code{R/utils/utils_categoricas.R} já tenha sido carregado.
+#'   Variáveis \code{character} e \code{factor} são automaticamente codificadas
+#'   como inteiros ordinais (leste=1, norte=2, …) usando o mapeamento do treino.
 #'
 #' @import data.table xgboost
 #' @export
@@ -57,9 +63,10 @@ xgb_train <- function(dt_treino,
   if (length(features) == 0)
     stop("Nenhuma feature disponível para treino após exclusões.")
 
-  X <- dt_treino[, features, with = FALSE]
-  X <- X[, lapply(.SD, as.numeric)]
-  y <- as.numeric(dt_treino[[var_target]])
+  # Codifica categoricas para inteiros e guarda o mapeamento de níveis
+  enc    <- codificar_categoricas(dt_treino, features)
+  X      <- enc$X[, lapply(.SD, as.numeric)]
+  y      <- as.numeric(dt_treino[[var_target]])
 
   dtrain <- xgboost::xgb.DMatrix(as.matrix(X), label = y)
 
@@ -75,6 +82,7 @@ xgb_train <- function(dt_treino,
   return(list(
     modelo     = modelo,
     features   = features,
+    factor_map = enc$factor_map,
     params     = params,
     nrounds    = nrounds,
     var_target = var_target

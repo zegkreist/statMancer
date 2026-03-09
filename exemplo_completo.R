@@ -30,8 +30,11 @@ src <- function(...) file.path(root_dir, ...)
 source(src("R/sampling/sampling_balance.R"))
 source(src("R/sampling/sampling_split.R"))
 source(src("R/stats/stats_search.R"))
+source(src("R/utils/utils_categoricas.R"))
 source(src("R/modeling/modeling_xgb_train.R"))
 source(src("R/modeling/modeling_xgb_predict.R"))
+source(src("R/utils/utils_modelagem.R"))
+source(src("R/modeling/modeling_xgb_ensemble.R"))
 source(src("R/reporting/reporting_metrics.R"))
 source(src("R/reporting/reporting_render.R"))
 
@@ -56,40 +59,73 @@ N_NEG    <- N_TOTAL - N_POS
 dados <- data.table(
   id       = seq_len(N_TOTAL),
   target   = c(rep(1L, N_POS), rep(0L, N_NEG)),
-  regiao   = sample(c("norte", "sul", "leste", "oeste"), N_TOTAL, replace = TRUE),
-  # Features com sinal real (médias distintas entre classes)
+
+  # ── Variáveis categóricas COM sinal (factor) ─────────────────────────────
+  # Positivos: maioria "M"; negativos: maioria "F"
+  sexo = factor(c(
+    sample(c("M", "F"), N_POS, replace = TRUE, prob = c(0.68, 0.32)),
+    sample(c("M", "F"), N_NEG, replace = TRUE, prob = c(0.38, 0.62))
+  )),
+
+  # Positivos: preferem "app"/"online"; negativos: preferem "loja"/"telefone"
+  canal = factor(c(
+    sample(c("app", "online", "loja", "telefone"), N_POS,
+           replace = TRUE, prob = c(0.50, 0.30, 0.10, 0.10)),
+    sample(c("app", "online", "loja", "telefone"), N_NEG,
+           replace = TRUE, prob = c(0.15, 0.20, 0.35, 0.30))
+  )),
+
+  # Character (não factor) COM sinal — também suportado automaticamente
+  faixa_risco = c(
+    sample(c("alto", "medio", "baixo"), N_POS,
+           replace = TRUE, prob = c(0.60, 0.30, 0.10)),
+    sample(c("alto", "medio", "baixo"), N_NEG,
+           replace = TRUE, prob = c(0.15, 0.35, 0.50))
+  ),
+
+  # ── Variável categórica SEM sinal (factor) ────────────────────────────────
+  regiao = factor(
+    sample(c("norte", "sul", "leste", "oeste"), N_TOTAL, replace = TRUE)
+  ),
+
+  # ── Variáveis numéricas ───────────────────────────────────────────────────
   score_a  = c(rnorm(N_POS, mean = 72, sd = 10), rnorm(N_NEG, mean = 48, sd = 15)),
   score_b  = c(rnorm(N_POS, mean = 62, sd = 8),  rnorm(N_NEG, mean = 55, sd = 12)),
   score_c  = c(rnorm(N_POS, mean = 58, sd = 9),  rnorm(N_NEG, mean = 52, sd = 11)),
-  # Features sem sinal (ruído)
   ruido_1  = rnorm(N_TOTAL),
   ruido_2  = rnorm(N_TOTAL),
-  # Feature de idade (sinal leve)
   idade    = c(sample(40L:70L, N_POS, replace = TRUE),
                sample(20L:65L, N_NEG, replace = TRUE))
 )
 
-cat(sprintf("   Total: %s obs | Positivos: %s (%.0f%%) | Negativos: %s\n\n",
+cat(sprintf("   Total: %s obs | Positivos: %s (%.0f%%) | Negativos: %s\n",
             format(N_TOTAL, big.mark = "."),
             format(N_POS,   big.mark = "."), 100 * N_POS / N_TOTAL,
             format(N_NEG,   big.mark = ".")))
+cat("   Categ. COM sinal: sexo (factor), canal (factor), faixa_risco (character)\n")
+cat("   Categ. sem sinal: regiao (factor)\n\n")
 
 
 # ── 2. Busca Estatística de Variáveis ────────────────────────────────────────
-cat("── 2. Busca estatística de variáveis ──────────────────\n")
+cat("── 2. Busca estatística de variáveis (numéricas + categóricas) ─\n")
 
 busca <- suppressMessages(
   stats_search(dados,
                var_target   = "target",
-               vars_excluir = c("id", "regiao"),   # excluir ID; regiao é categórica
+               vars_excluir = c("id"),   # inclui categóricas na busca
                tipo_target  = "classificacao")
 )
 
 cat(sprintf("   %d variáveis testadas\n", nrow(busca)))
-cat(sprintf("   Top 3 mais relevantes: %s\n",
-            paste(busca[1:3, variavel], collapse = ", ")))
-cat(sprintf("   Significativas (p < 0.05): %d/%d\n\n",
-            busca[, sum(significativa)], nrow(busca)))
+cat(sprintf("   Significativas (p < 0.05): %d/%d\n", busca[, sum(significativa)], nrow(busca)))
+cat(sprintf("   Top 5 mais relevantes:\n"))
+for (i in seq_len(min(5L, nrow(busca)))) {
+  cat(sprintf("     %d. %-15s [%s] %-18s p=%.2e  rel=%.3f\n",
+              i, busca[i, variavel], busca[i, tipo_variavel],
+              paste0("(", busca[i, teste], ")"),
+              busca[i, p_valor], busca[i, relevancia]))
+}
+cat("\n")
 
 
 # ── 3. Divisão Treino / Teste ────────────────────────────────────────────────
@@ -127,8 +163,8 @@ cat(sprintf("   Treino balanceado: %s obs | Positivos: %.0f%% | Negativos: %.0f%
             100 * treino_bal[, mean(target == 0)]))
 
 
-# ── 5. Treino do Modelo XGBoost ──────────────────────────────────────────────
-cat("── 5. Treinando modelo XGBoost ────────────────────────\n")
+# ── 5. Treino do Ensemble XGBoost ────────────────────────────────────────────
+cat("── 5. Treinando ensemble XGBoost (10 modelos) ─────────\n")
 
 params_xgb <- list(
   objective        = "binary:logistic",
@@ -143,30 +179,44 @@ params_xgb <- list(
   tree_method      = "hist"
 )
 
-modelo <- xgb_train(
-  dt_treino    = treino_bal,
-  var_target   = "target",
-  vars_excluir = c("id", "regiao"),    # regiao precisa de encoding antes de entrar
-  params       = params_xgb,
-  nrounds      = 150L,
-  verbose      = FALSE
+ensemble <- xgb_treino_ensemble(
+  dt                    = treino_bal,
+  var_id                = "id",
+  var_target            = "target",
+  vars_excluir          = NULL,   # todas as categóricas entram como features
+  parametros_treino     = list(parametros = params_xgb, nrounds = 150L),
+  n_models              = 10L,
+  metodo_reamostragem   = "upsample",
+  folder_saida          = file.path(output_dir, "ensemble"),
+  early_stopping_rounds = 20L,
+  validation_split      = 0.1,
+  seed                  = 42L,
+  nthreads              = 1L
 )
 
-cat(sprintf("   Features: %d | Rounds: %d\n",
-            length(modelo$features), modelo$nrounds))
-cat(sprintf("   Features utilizadas: %s\n\n",
-            paste(modelo$features, collapse = ", ")))
+cat(sprintf("   Modelos treinados: %d\n",     length(ensemble$modelos)))
+cat(sprintf("   Features: %d | Pasta: %s\n\n",
+            length(ensemble$metadata$training_config$colunas_features),
+            ensemble$folder_saida))
 
 
-# ── 6. Predição no Teste ─────────────────────────────────────────────────────
-cat("── 6. Predizendo no conjunto de teste ─────────────────\n")
+# ── 6. Predição com o Ensemble no Teste ──────────────────────────────────────
+cat("── 6. Predizendo com ensemble no conjunto de teste ─────\n")
 
-predicoes_raw <- xgb_predict(modelo, split$teste, var_id = "id")
+# xgb_prever_ensemble usa o factor_map do treino para codificação consistente
+preds_ensemble <- xgb_prever_ensemble(
+  dados_novos     = split$teste,
+  ensemble_obj    = ensemble,
+  metodo_combinacao = "media",
+  retornar_com_id = TRUE,
+  nthreads        = 1L
+)
 
-# Juntar predições com o target real
+# preds_ensemble retorna data.table(id, predicao) — renomeamos para 'predito'
+# para compatibilidade com metricas_binario()
 dt_avaliacao <- merge(
   split$teste[, .(id, target)],
-  predicoes_raw,
+  preds_ensemble[, .(id, predito = predicao)],
   by = "id"
 )
 
@@ -229,10 +279,20 @@ cat("── 9. Gerando relatório HTML ─────────────�
 
 dados_rds <- file.path(output_dir, "dados_relatorio.rds")
 
+# Constrói um objeto modelo_obj compatível com preparar_dados_relatorio(),
+# usando o primeiro modelo do ensemble como representante
+modelo_report <- list(
+  modelo     = ensemble$modelos[[1]],
+  features   = ensemble$metadata$training_config$colunas_features,
+  params     = ensemble$metadata$parametros_treino$parametros,
+  nrounds    = ensemble$metadata$parametros_treino$nrounds,
+  var_target = "target"
+)
+
 preparar_dados_relatorio(
-  titulo            = "Modelo Preditivo — Classificação Binária (Exemplo statMancer)",
+  titulo            = "Ensemble XGBoost — Classificação Binária com Categóricas (statMancer)",
   descricao         = paste0(
-    "Pipeline completo com dados sintéticos. ",
+    "Pipeline com ensemble de 10 modelos (upsample), inclui variáveis factor e character. ",
     "AUC = ", sprintf("%.4f", metricas$auc),
     " | KS = ", sprintf("%.4f", metricas$ks),
     " | Gini = ", sprintf("%.4f", metricas$gini)
@@ -242,7 +302,7 @@ preparar_dados_relatorio(
   var_target        = "target",
   var_id            = "id",
   busca_estatistica = busca,
-  modelo_obj        = modelo,
+  modelo_obj        = modelo_report,
   predicoes_teste   = dt_avaliacao,
   caminho_saida     = dados_rds
 )
