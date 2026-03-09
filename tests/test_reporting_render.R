@@ -585,4 +585,198 @@ test_render_cria_output_dir()
 test_render_output_file_customizado()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# template_modelo.qmd — renderização real com e sem ensemble
+# ─────────────────────────────────────────────────────────────────────────────
+cat("--- template_modelo.qmd (renderização real) ---\n")
+
+.template_real <- file.path(.proj_root, "report", "template_modelo.qmd")
+
+# Fixture: RDS sem ensemble
+.tmp_rds_noens <- tempfile(fileext = ".rds")
+preparar_dados_relatorio(
+  titulo          = "Teste Template Sem Ensemble",
+  descricao       = "Renderizacao sem ensemble — TDD",
+  dt_treino       = data.table::copy(.dt_tr),
+  dt_teste        = data.table::copy(.dt_te),
+  var_target      = "target",
+  var_id          = "id",
+  modelo_obj      = .modelo_obj,
+  predicoes_teste = data.table::copy(.predicoes),
+  caminho_saida   = .tmp_rds_noens
+)
+on.exit(if (file.exists(.tmp_rds_noens)) unlink(.tmp_rds_noens), add = TRUE)
+
+# Fixture: RDS com ensemble
+.tmp_rds_ens <- tempfile(fileext = ".rds")
+preparar_dados_relatorio(
+  titulo          = "Teste Template Com Ensemble",
+  descricao       = "Renderizacao com ensemble — TDD",
+  dt_treino       = data.table::copy(.dt_tr),
+  dt_teste        = data.table::copy(.dt_te),
+  var_target      = "target",
+  var_id          = "id",
+  modelo_obj      = .modelo_obj,
+  predicoes_teste = data.table::copy(.predicoes),
+  ensemble_obj    = .ensemble_obj,
+  caminho_saida   = .tmp_rds_ens
+)
+on.exit(if (file.exists(.tmp_rds_ens)) unlink(.tmp_rds_ens), add = TRUE)
+
+# TQ1: template real renderiza sem erro (caminho modelo único)
+test_template_render_sem_ensemble <- function() {
+  tmp_out <- file.path(tempdir(), paste0("tq1_", as.integer(Sys.time())))
+  on.exit(if (dir.exists(tmp_out)) unlink(tmp_out, recursive = TRUE))
+
+  renderizar_relatorio(
+    template_qmd = .template_real,
+    dados_rds    = .tmp_rds_noens,
+    output_file  = "relatorio.html",
+    output_dir   = tmp_out
+  )
+
+  html_path <- file.path(tmp_out, "relatorio.html")
+  .assert(file.exists(html_path), "HTML deve ser criado")
+  .assert(file.info(html_path)$size > 0L, "HTML nao deve ser vazio")
+
+  html <- paste(readLines(html_path, warn = FALSE, encoding = "UTF-8"), collapse = " ")
+  .assert(grepl("Curva ROC",       html, fixed = TRUE), "HTML deve conter secao Curva ROC")
+  .assert(grepl("Lift por Decil",  html, fixed = TRUE), "HTML deve conter secao Lift por Decil")
+  .assert(grepl("modelo único",    html),               "HTML deve indicar modo modelo unico")
+  .assert(!grepl("Arquitetura Ensemble", html),         "HTML nao deve conter bloco de ensemble")
+  cat("PASS: test_template_render_sem_ensemble\n\n")
+}
+
+# TQ2: template real renderiza com ensemble e exibe todas as seções ensemble
+test_template_render_com_ensemble <- function() {
+  tmp_out <- file.path(tempdir(), paste0("tq2_", as.integer(Sys.time())))
+  on.exit(if (dir.exists(tmp_out)) unlink(tmp_out, recursive = TRUE))
+
+  renderizar_relatorio(
+    template_qmd = .template_real,
+    dados_rds    = .tmp_rds_ens,
+    output_file  = "relatorio.html",
+    output_dir   = tmp_out
+  )
+
+  html_path <- file.path(tmp_out, "relatorio.html")
+  .assert(file.exists(html_path), "HTML deve ser criado")
+  .assert(file.info(html_path)$size > 0L, "HTML nao deve ser vazio")
+
+  html <- paste(readLines(html_path, warn = FALSE, encoding = "UTF-8"), collapse = " ")
+  .assert(grepl("Arquitetura Ensemble",       html, fixed = TRUE), "HTML deve conter bloco de ensemble")
+  .assert(grepl("N modelos",                  html, fixed = TRUE), "HTML deve mostrar numero de modelos")
+  .assert(grepl("Gain M",                     html, fixed = TRUE), "HTML deve conter coluna Gain Media")
+  .assert(grepl("threshold",                  html),               "HTML deve conter secao de threshold")
+  .assert(grepl("Curva ROC",                  html, fixed = TRUE), "HTML deve conter secao Curva ROC")
+  .assert(!grepl("modelo único",              html),               "HTML nao deve mostrar aviso de modelo unico")
+  cat("PASS: test_template_render_com_ensemble\n\n")
+}
+
+test_template_render_sem_ensemble()
+test_template_render_com_ensemble()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TQ3–TQ6: conteúdo real da seção de importância
+# ─────────────────────────────────────────────────────────────────────────────
+cat("--- conteudo da secao de importancia ---\n")
+
+# TQ3: kable ensemble tem linhas com valores numéricos reais (5 casas decimais)
+test_template_kable_ensemble_tem_linhas <- function() {
+  tmp_out <- file.path(tempdir(), paste0("tq3_", as.integer(Sys.time())))
+  on.exit(if (dir.exists(tmp_out)) unlink(tmp_out, recursive = TRUE))
+
+  renderizar_relatorio(
+    template_qmd = .template_real,
+    dados_rds    = .tmp_rds_ens,
+    output_file  = "relatorio.html",
+    output_dir   = tmp_out
+  )
+  html <- paste(readLines(file.path(tmp_out, "relatorio.html"),
+                          warn = FALSE, encoding = "UTF-8"), collapse = " ")
+
+  d        <- readRDS(.tmp_rds_ens)
+  top_feat <- d$importancia_ensemble[1, Feature]
+  gain_val <- sprintf("%.5f", round(d$importancia_ensemble[1, Gain_media], 5))
+
+  .assert(grepl(top_feat, html, fixed = TRUE),
+          paste0("Feature '", top_feat, "' deve aparecer na tabela kable de importância"))
+  .assert(grepl(gain_val, html, fixed = TRUE),
+          paste0("Gain '", gain_val, "' (5 casas) deve aparecer nas linhas do kable ensemble"))
+  cat("PASS: test_template_kable_ensemble_tem_linhas\n\n")
+}
+
+# TQ4: kable modelo único (sem ensemble) também tem linhas com valores reais
+test_template_kable_modelo_unico_tem_linhas <- function() {
+  tmp_out <- file.path(tempdir(), paste0("tq4_", as.integer(Sys.time())))
+  on.exit(if (dir.exists(tmp_out)) unlink(tmp_out, recursive = TRUE))
+
+  renderizar_relatorio(
+    template_qmd = .template_real,
+    dados_rds    = .tmp_rds_noens,
+    output_file  = "relatorio.html",
+    output_dir   = tmp_out
+  )
+  html <- paste(readLines(file.path(tmp_out, "relatorio.html"),
+                          warn = FALSE, encoding = "UTF-8"), collapse = " ")
+
+  d        <- readRDS(.tmp_rds_noens)
+  top_feat <- d$importancia[1, Feature]
+  gain_val <- sprintf("%.5f", round(d$importancia[1, Gain], 5))
+
+  .assert(grepl(top_feat, html, fixed = TRUE),
+          paste0("Feature '", top_feat, "' deve aparecer na tabela kable de importância"))
+  .assert(grepl(gain_val, html, fixed = TRUE),
+          paste0("Gain '", gain_val, "' (5 casas) deve aparecer nas linhas do kable modelo único"))
+  cat("PASS: test_template_kable_modelo_unico_tem_linhas\n\n")
+}
+
+# TQ5: ggplot ensemble renderiza (pelo menos um <img ou <svg no HTML gerado)
+test_template_plot_ensemble_renderiza <- function() {
+  tmp_out <- file.path(tempdir(), paste0("tq5_", as.integer(Sys.time())))
+  on.exit(if (dir.exists(tmp_out)) unlink(tmp_out, recursive = TRUE))
+
+  renderizar_relatorio(
+    template_qmd = .template_real,
+    dados_rds    = .tmp_rds_ens,
+    output_file  = "relatorio.html",
+    output_dir   = tmp_out
+  )
+  html <- paste(readLines(file.path(tmp_out, "relatorio.html"),
+                          warn = FALSE, encoding = "UTF-8"), collapse = " ")
+
+  # ggplots em embed-resources aparecem como <img src="data:image ou <svg
+  n_plots <- lengths(regmatches(html, gregexpr("<img |<svg ", html)))
+  .assert(n_plots >= 4L,
+          paste0("HTML deve conter ao menos 4 plots (img/svg), encontrou: ", n_plots))
+  cat("PASS: test_template_plot_ensemble_renderiza\n\n")
+}
+
+# TQ6: ggplot modelo único renderiza
+test_template_plot_modelo_unico_renderiza <- function() {
+  tmp_out <- file.path(tempdir(), paste0("tq6_", as.integer(Sys.time())))
+  on.exit(if (dir.exists(tmp_out)) unlink(tmp_out, recursive = TRUE))
+
+  renderizar_relatorio(
+    template_qmd = .template_real,
+    dados_rds    = .tmp_rds_noens,
+    output_file  = "relatorio.html",
+    output_dir   = tmp_out
+  )
+  html <- paste(readLines(file.path(tmp_out, "relatorio.html"),
+                          warn = FALSE, encoding = "UTF-8"), collapse = " ")
+
+  n_plots <- lengths(regmatches(html, gregexpr("<img |<svg ", html)))
+  .assert(n_plots >= 4L,
+          paste0("HTML deve conter ao menos 4 plots (img/svg), encontrou: ", n_plots))
+  cat("PASS: test_template_plot_modelo_unico_renderiza\n\n")
+}
+
+test_template_kable_ensemble_tem_linhas()
+test_template_kable_modelo_unico_tem_linhas()
+test_template_plot_ensemble_renderiza()
+test_template_plot_modelo_unico_renderiza()
+
+
 cat("\n======= TODOS OS TESTES PASSARAM: reporting_render =======\n")
