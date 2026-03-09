@@ -641,7 +641,6 @@ test_template_render_sem_ensemble <- function() {
 
   html <- paste(readLines(html_path, warn = FALSE, encoding = "UTF-8"), collapse = " ")
   .assert(grepl("Curva ROC",       html, fixed = TRUE), "HTML deve conter secao Curva ROC")
-  .assert(grepl("Lift por Decil",  html, fixed = TRUE), "HTML deve conter secao Lift por Decil")
   .assert(grepl("modelo único",    html),               "HTML deve indicar modo modelo unico")
   .assert(!grepl("Arquitetura Ensemble", html),         "HTML nao deve conter bloco de ensemble")
   cat("PASS: test_template_render_sem_ensemble\n\n")
@@ -777,6 +776,40 @@ test_template_kable_ensemble_tem_linhas()
 test_template_kable_modelo_unico_tem_linhas()
 test_template_plot_ensemble_renderiza()
 test_template_plot_modelo_unico_renderiza()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TQ7: seções de decil foram removidas do template
+# ─────────────────────────────────────────────────────────────────────────────
+cat("--- ausencia de secoes de decil ---\n")
+
+# TQ7: nenhum dos dois caminhos (com/sem ensemble) deve conter seções de decil
+test_template_sem_secoes_decil <- function() {
+  for (rds_path in list(.tmp_rds_noens, .tmp_rds_ens)) {
+    sufixo  <- if (identical(rds_path, .tmp_rds_noens)) "noens" else "ens"
+    tmp_out <- file.path(tempdir(), paste0("tq7_", sufixo, "_", as.integer(Sys.time())))
+    on.exit(if (dir.exists(tmp_out)) unlink(tmp_out, recursive = TRUE), add = TRUE)
+
+    renderizar_relatorio(
+      template_qmd = .template_real,
+      dados_rds    = rds_path,
+      output_file  = "relatorio.html",
+      output_dir   = tmp_out
+    )
+    html <- paste(readLines(file.path(tmp_out, "relatorio.html"),
+                            warn = FALSE, encoding = "UTF-8"), collapse = " ")
+
+    .assert(!grepl("Tabela de Decis",        html, fixed = TRUE),
+            paste0("[", sufixo, "] HTML nao deve conter 'Tabela de Decis'"))
+    .assert(!grepl("Lift por Decil",         html, fixed = TRUE),
+            paste0("[", sufixo, "] HTML nao deve conter 'Lift por Decil'"))
+    .assert(!grepl("Captura Acumulada",      html, fixed = TRUE),
+            paste0("[", sufixo, "] HTML nao deve conter 'Captura Acumulada'"))
+  }
+  cat("PASS: test_template_sem_secoes_decil\n\n")
+}
+
+test_template_sem_secoes_decil()
 
 
 cat("\n======= TODOS OS TESTES PASSARAM: reporting_render =======\n")

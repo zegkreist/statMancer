@@ -393,58 +393,6 @@ if (!is.null(dados$metricas_por_cortes) && nrow(dados$metricas_por_cortes) > 0) 
 }
 ```
 
-### Tabela de Decis
-
-```{r decile-table}
-tbl_d <- dados$tabela_decis[, .(
-  Decil           = decil,
-  N               = format(n,   big.mark = "."),
-  `N Positivos`   = format(n_pos, big.mark = "."),
-  `Taxa Evento`   = sprintf("%.2f%%", taxa_evento  * 100),
-  Lift            = sprintf("%.2f",   lift),
-  `Captura`       = sprintf("%.2f%%", captura      * 100),
-  `Captura Acum.` = sprintf("%.2f%%", captura_acum * 100),
-  `Score Médio`   = sprintf("%.3f",   score_medio)
-)]
-kable(tbl_d, align = c("c", rep("r", 7)),
-      caption = "Decil 1 = maior score predito")
-```
-
-### Gráfico de Lift por Decil
-
-```{r lift-plot}
-ggplot(dados$tabela_decis, aes(x = decil, y = lift)) +
-  geom_col(fill = COR_LIFT, alpha = 0.85, width = 0.7) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = COR_NEG, linewidth = 0.8) +
-  geom_text(aes(label = sprintf("%.2f", lift)),
-            vjust = -0.4, size = 3.5, fontface = "bold") +
-  scale_x_continuous(breaks = seq_len(max(dados$tabela_decis$decil))) +
-  annotate("text", x = max(dados$tabela_decis$decil) * 0.7,
-           y = 1.07, label = "lift = 1 (aleatório)", color = COR_NEG, size = 3.5) +
-  labs(title    = "Lift por Decil",
-       subtitle = "Decil 1 = segmento de maior score (mais propenso ao evento)",
-       x = "Decil", y = "Lift") +
-  TEMA
-```
-
-### Captura Acumulada
-
-```{r capture-plot}
-ggplot(dados$tabela_decis, aes(x = decil, y = captura_acum)) +
-  geom_line(color = COR_POS, linewidth = 1.1) +
-  geom_point(color = COR_POS, size = 3) +
-  geom_text(aes(label = sprintf("%.0f%%", captura_acum * 100)),
-            vjust = -0.8, size = 3.2) +
-  geom_abline(slope = 1 / max(dados$tabela_decis$decil), intercept = 0,
-              linetype = "dashed", color = "gray50") +
-  scale_x_continuous(breaks = seq_len(max(dados$tabela_decis$decil))) +
-  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1.1)) +
-  labs(title    = "Curva de Captura Acumulada",
-       subtitle = "Linha tracejada = seleção aleatória",
-       x = "Decil", y = "% de Positivos Capturados") +
-  TEMA
-```
-
 ---
 
 ## Importância das Features
