@@ -6,12 +6,53 @@ format:
     toc: true
     toc-depth: 3
     toc-title: "Sumário"
+    toc-location: left
     number-sections: false
     code-fold: true
     embed-resources: true
     fig-width: 9
     fig-height: 5
     df-print: kable
+    smooth-scroll: true
+    css: |
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.6;
+        color: #333;
+      }
+      h1, h2, h3 {
+        color: #2c3e50;
+      }
+      h2 {
+        border-bottom: 2px solid #3498db;
+        padding-bottom: 5px;
+      }
+      .alert {
+        padding: 15px;
+        margin-bottom: 20px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+      }
+      .alert-success {
+        color: #155724;
+        background-color: #d4edda;
+        border-color: #c3e6cb;
+      }
+      .alert-warning {
+        color: #856404;
+        background-color: #fff3cd;
+        border-color: #ffeaa7;
+      }
+      .alert-info {
+        color: #0c5460;
+        background-color: #d1ecf1;
+        border-color: #bee5eb;
+      }
+      .alert-danger {
+        color: #721c24;
+        background-color: #f8d7da;
+        border-color: #f5c6cb;
+      }
 params:
   dados_rds: "dados_relatorio.rds"
 execute:
@@ -19,6 +60,511 @@ execute:
   message: false
   echo: false
 ---
+
+```{r setup}
+#| include: false
+library(data.table)
+library(ggplot2)
+library(knitr)
+
+dados <- readRDS(params$dados_rds)
+
+# Paleta de cores consistente
+COR_POS    <- "#2196F3"
+COR_NEG    <- "#F44336"
+COR_ACCENT <- "#4CAF50"
+COR_LIFT   <- "#FF9800"
+TEMA       <- theme_minimal(base_size = 13) +
+              theme(plot.title    = element_text(face = "bold"),
+                    plot.subtitle = element_text(color = "gray50"))
+
+# Helper: avaliação qualitativa de AUC
+.aval_auc <- function(auc) {
+  if (auc >= 0.9)       "🏆 Excelente"
+  else if (auc >= 0.8)  "✅ Bom"
+  else if (auc >= 0.7)  "⚠️ Razoável"
+  else                  "❌ Fraco"
+}
+.aval_ks <- function(ks) {
+  if (ks >= 0.4)        "🏆 Excelente"
+  else if (ks >= 0.3)   "✅ Bom"
+  else if (ks >= 0.2)   "⚠️ Razoável"
+  else                  "❌ Fraco"
+}
+```
+
+# `r dados$titulo`
+
+> `r if (nzchar(dados$descricao)) dados$descricao else "Relatório de avaliação de modelo preditivo."`
+
+**Gerado em:** `r format(dados$data_geracao, "%d/%m/%Y às %H:%M")`
+
+---
+
+## Sumário Executivo
+
+```{r exec-summary-box}
+#| output: asis
+metricas <- dados$metricas
+n_modelos_ens <- if (!is.null(dados$importancia_ensemble))
+  dados$importancia_ensemble[1, Num_Modelos]
+else 1L
+
+aval_class <- if (metricas$auc >= 0.8) "alert-success" else if (metricas$auc >= 0.7) "alert-warning" else "alert-danger"
+
+cat(sprintf('
+<div class="alert %s">
+<strong>📊 Resumo do Modelo — Avaliação no Conjunto de Teste</strong><br><br>
+<table style="width:100%%;border:none">
+<tr>
+  <td><strong>AUC:</strong> %.4f &nbsp; %s</td>
+  <td><strong>KS:</strong> %.4f &nbsp; %s</td>
+  <td><strong>Gini:</strong> %.4f</td>
+</tr>
+<tr>
+  <td><strong>Precision:</strong> %.4f</td>
+  <td><strong>Recall:</strong> %.4f</td>
+  <td><strong>F1:</strong> %.4f</td>
+</tr>
+<tr>
+  <td><strong>Accuracy:</strong> %.4f</td>
+  <td><strong>N teste:</strong> %s</td>
+  <td><strong>Taxa evento:</strong> %.1f%%</td>
+</tr>
+</table>
+</div>',
+  aval_class,
+  metricas$auc, .aval_auc(metricas$auc),
+  metricas$ks,  .aval_ks(metricas$ks),
+  metricas$gini,
+  metricas$precision,
+  metricas$recall,
+  metricas$f1,
+  metricas$accuracy,
+  format(metricas$n_total, big.mark = "."),
+  metricas$taxa_evento * 100
+))
+```
+
+```{r exec-ensemble-box}
+#| output: asis
+if (!is.null(dados$importancia_ensemble)) {
+  n_m <- dados$importancia_ensemble[1, Num_Modelos]
+  top3 <- paste(dados$importancia_ensemble[1:min(3, .N), Feature], collapse = " · ")
+  cat(sprintf('
+<div class="alert alert-info">
+<strong>🧩 Arquitetura Ensemble</strong><br><br>
+<strong>N modelos:</strong> %d &nbsp;|&nbsp;
+<strong>N features:</strong> %d &nbsp;|&nbsp;
+<strong>Top 3 features:</strong> <code>%s</code>
+</div>',
+  n_m,
+  length(dados$features),
+  top3
+  ))
+}
+```
+
+---
+
+## Dados
+
+### Conjuntos de Treino e Teste
+
+```{r data-overview}
+resumo_dados <- data.frame(
+  Conjunto        = c("Treino", "Teste"),
+  `N registros`   = c(format(dados$n_treino,     big.mark = "."),
+                       format(dados$n_teste,      big.mark = ".")),
+  `N IDs únicos`  = c(format(dados$n_ids_treino, big.mark = "."),
+                       format(dados$n_ids_teste,  big.mark = ".")),
+  `Taxa de evento`= c(sprintf("%.2f%%", dados$taxa_evento_treino * 100),
+                       sprintf("%.2f%%", dados$taxa_evento_teste  * 100)),
+  check.names = FALSE
+)
+kable(resumo_dados, align = c("l", "r", "r", "r"))
+```
+
+### Distribuição do Target
+
+```{r target-dist}
+dist_join <- rbind(
+  cbind(dados$dist_target_treino, conjunto = "Treino"),
+  cbind(dados$dist_target_teste,  conjunto = "Teste")
+)
+dist_join[, target := factor(target, labels = c("Negativo (0)", "Positivo (1)"))]
+
+ggplot(dist_join, aes(x = conjunto, y = prop, fill = target)) +
+  geom_col(position = "dodge", width = 0.6, alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%\nn=%s", prop * 100, format(N, big.mark = "."))),
+            position = position_dodge(width = 0.6),
+            vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = c("Negativo (0)" = COR_NEG, "Positivo (1)" = COR_POS),
+                    name   = "Classe") +
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+  labs(title = "Distribuição do Target por Conjunto",
+       x = NULL, y = "Proporção") +
+  TEMA
+```
+
+```{r score-stats-box}
+#| output: asis
+pred_dt <- dados$predicoes
+s_pos <- pred_dt[get(dados$var_target) == 1L, predito]
+s_neg <- pred_dt[get(dados$var_target) == 0L, predito]
+
+cat(sprintf('
+<div class="alert alert-info">
+<strong>📈 Estatísticas dos Scores</strong><br><br>
+<table style="width:100%%;border:none">
+<tr>
+  <th style="text-align:left"></th>
+  <th style="text-align:right">Mín</th>
+  <th style="text-align:right">Média</th>
+  <th style="text-align:right">Mediana</th>
+  <th style="text-align:right">Máx</th>
+  <th style="text-align:right">DP</th>
+</tr>
+<tr>
+  <td><strong>Positivos (1)</strong></td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+</tr>
+<tr>
+  <td><strong>Negativos (0)</strong></td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+  <td style="text-align:right">%.3f</td>
+</tr>
+</table>
+</div>',
+  min(s_pos), mean(s_pos), median(s_pos), max(s_pos), sd(s_pos),
+  min(s_neg), mean(s_neg), median(s_neg), max(s_neg), sd(s_neg)
+))
+```
+
+---
+
+## Busca Estatística de Variáveis
+
+```{r stats-search}
+if (!is.null(dados$busca_estatistica) && nrow(dados$busca_estatistica) > 0) {
+  top_n <- min(15L, nrow(dados$busca_estatistica))
+  busca <- dados$busca_estatistica[1:top_n]
+
+  tbl_busca <- busca[, .(
+    Variável       = variavel,
+    Tipo           = tipo_variavel,
+    Teste          = teste,
+    `Estatística`  = round(estatistica, 4),
+    `P-valor`      = ifelse(p_valor < 0.001, "< 0.001", sprintf("%.4f", p_valor)),
+    Relevância     = round(relevancia, 4),
+    Significativa  = ifelse(significativa, "✅", "❌")
+  )]
+  kable(tbl_busca,
+        caption = paste0("Top ", top_n, " variáveis ordenadas por p-valor crescente"))
+} else {
+  cat("*Busca estatística não executada ou sem resultados.*")
+}
+```
+
+```{r stats-search-plot}
+if (!is.null(dados$busca_estatistica) && nrow(dados$busca_estatistica) > 0) {
+  top_n  <- min(15L, nrow(dados$busca_estatistica))
+  busca  <- dados$busca_estatistica[1:top_n]
+
+  ggplot(busca, aes(x = reorder(variavel, relevancia), y = relevancia,
+                    fill = tipo_variavel)) +
+    geom_col(alpha = 0.85) +
+    coord_flip() +
+    scale_fill_manual(values = c("numerica"   = COR_POS,
+                                 "categorica" = COR_LIFT),
+                      name = "Tipo") +
+    labs(title    = "Relevância das Variáveis",
+         subtitle = "Tamanho de efeito (D de KS / V de Cramér / |r| / η²)",
+         x = NULL, y = "Relevância") +
+    TEMA
+}
+```
+
+---
+
+## Performance do Modelo
+
+### Curva ROC
+
+```{r roc-plot}
+auc_label <- sprintf("AUC = %.4f  |  Gini = %.4f  |  KS = %.4f",
+                     dados$metricas$auc, dados$metricas$gini, dados$metricas$ks)
+
+ggplot(dados$curva_roc, aes(x = fpr, y = tpr)) +
+  geom_line(color = COR_POS, linewidth = 1.1) +
+  geom_ribbon(aes(ymin = 0, ymax = tpr), fill = COR_POS, alpha = 0.1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  annotate("text", x = 0.62, y = 0.10, label = auc_label,
+           size = 3.8, color = "gray30") +
+  scale_x_continuous(labels = scales::percent_format()) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title    = "Curva ROC",
+       subtitle = "Linha tracejada = classificador aleatório",
+       x = "Taxa de Falsos Positivos (FPR)",
+       y = "Taxa de Verdadeiros Positivos (TPR)") +
+  coord_equal() +
+  TEMA
+```
+
+### Distribuição dos Scores
+
+```{r score-dist}
+pred_dt2 <- dados$predicoes
+pred_dt2[, classe := factor(get(dados$var_target),
+                             levels = c(0, 1),
+                             labels = c("Negativo (0)", "Positivo (1)"))]
+
+ggplot(pred_dt2, aes(x = predito, fill = classe, color = classe)) +
+  geom_density(alpha = 0.45, linewidth = 0.8) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray40") +
+  scale_fill_manual(values  = c("Negativo (0)" = COR_NEG, "Positivo (1)" = COR_POS),
+                    name    = "Classe") +
+  scale_color_manual(values = c("Negativo (0)" = COR_NEG, "Positivo (1)" = COR_POS),
+                     guide  = "none") +
+  annotate("text", x = 0.52, y = Inf, vjust = 2,
+           label = "threshold 0.5", size = 3.5, color = "gray40") +
+  labs(title    = "Distribuição dos Scores por Classe",
+       subtitle = "Maior separação entre as curvas = melhor discriminação",
+       x = "Score predito",
+       y = "Densidade") +
+  TEMA
+```
+
+### Métricas por Threshold
+
+```{r metricas-cortes}
+if (!is.null(dados$metricas_por_cortes) && nrow(dados$metricas_por_cortes) > 0) {
+  mpc <- dados$metricas_por_cortes
+  tbl_mpc <- mpc[, .(
+    Corte       = sprintf("%.2f", corte),
+    Precision   = sprintf("%.4f", precision),
+    Recall      = sprintf("%.4f", recall),
+    F1          = sprintf("%.4f", f1),
+    Accuracy    = sprintf("%.4f", accuracy),
+    Specificity = sprintf("%.4f", specificity),
+    TP          = format(tp, big.mark = "."),
+    TN          = format(tn, big.mark = "."),
+    FP          = format(fp, big.mark = "."),
+    FN          = format(fn, big.mark = ".")
+  )]
+  kable(tbl_mpc, align = c("r", rep("r", 9)),
+        caption = "Desempenho por threshold de classificação — escolha o corte conforme trade-off precision/recall")
+} else {
+  cat("*Métricas por corte não disponíveis.*")
+}
+```
+
+```{r metricas-cortes-plot}
+if (!is.null(dados$metricas_por_cortes) && nrow(dados$metricas_por_cortes) > 0) {
+  mpc_long <- melt(
+    dados$metricas_por_cortes[, .(corte, precision, recall, f1, specificity)],
+    id.vars = "corte",
+    variable.name = "metrica",
+    value.name    = "valor"
+  )
+  mpc_long[, metrica := factor(metrica,
+    levels = c("precision", "recall", "f1", "specificity"),
+    labels = c("Precision", "Recall", "F1", "Specificity"))]
+
+  ggplot(mpc_long, aes(x = corte, y = valor, color = metrica)) +
+    geom_line(linewidth = 1.0) +
+    geom_point(size = 2.5) +
+    scale_color_manual(values = c(
+      "Precision"   = COR_POS,
+      "Recall"      = COR_NEG,
+      "F1"          = COR_ACCENT,
+      "Specificity" = COR_LIFT
+    ), name = "Métrica") +
+    scale_x_continuous(breaks = dados$metricas_por_cortes$corte) +
+    scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+    labs(title    = "Métricas de Classificação por Threshold",
+         subtitle = "Precision e Recall tendem a inverter com o aumento do corte",
+         x = "Threshold", y = "Valor") +
+    TEMA
+}
+```
+
+### Tabela de Decis
+
+```{r decile-table}
+tbl_d <- dados$tabela_decis[, .(
+  Decil           = decil,
+  N               = format(n,   big.mark = "."),
+  `N Positivos`   = format(n_pos, big.mark = "."),
+  `Taxa Evento`   = sprintf("%.2f%%", taxa_evento  * 100),
+  Lift            = sprintf("%.2f",   lift),
+  `Captura`       = sprintf("%.2f%%", captura      * 100),
+  `Captura Acum.` = sprintf("%.2f%%", captura_acum * 100),
+  `Score Médio`   = sprintf("%.3f",   score_medio)
+)]
+kable(tbl_d, align = c("c", rep("r", 7)),
+      caption = "Decil 1 = maior score predito")
+```
+
+### Gráfico de Lift por Decil
+
+```{r lift-plot}
+ggplot(dados$tabela_decis, aes(x = decil, y = lift)) +
+  geom_col(fill = COR_LIFT, alpha = 0.85, width = 0.7) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = COR_NEG, linewidth = 0.8) +
+  geom_text(aes(label = sprintf("%.2f", lift)),
+            vjust = -0.4, size = 3.5, fontface = "bold") +
+  scale_x_continuous(breaks = seq_len(max(dados$tabela_decis$decil))) +
+  annotate("text", x = max(dados$tabela_decis$decil) * 0.7,
+           y = 1.07, label = "lift = 1 (aleatório)", color = COR_NEG, size = 3.5) +
+  labs(title    = "Lift por Decil",
+       subtitle = "Decil 1 = segmento de maior score (mais propenso ao evento)",
+       x = "Decil", y = "Lift") +
+  TEMA
+```
+
+### Captura Acumulada
+
+```{r capture-plot}
+ggplot(dados$tabela_decis, aes(x = decil, y = captura_acum)) +
+  geom_line(color = COR_POS, linewidth = 1.1) +
+  geom_point(color = COR_POS, size = 3) +
+  geom_text(aes(label = sprintf("%.0f%%", captura_acum * 100)),
+            vjust = -0.8, size = 3.2) +
+  geom_abline(slope = 1 / max(dados$tabela_decis$decil), intercept = 0,
+              linetype = "dashed", color = "gray50") +
+  scale_x_continuous(breaks = seq_len(max(dados$tabela_decis$decil))) +
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1.1)) +
+  labs(title    = "Curva de Captura Acumulada",
+       subtitle = "Linha tracejada = seleção aleatória",
+       x = "Decil", y = "% de Positivos Capturados") +
+  TEMA
+```
+
+---
+
+## Importância das Features
+
+```{r importance-section}
+#| output: asis
+if (!is.null(dados$importancia_ensemble)) {
+  cat(sprintf('
+<div class="alert alert-info">
+<strong>🧩 Importância Ensemble</strong> — média de Gain calculada sobre
+<strong>%d modelos</strong>. O desvio padrão (DP) e o coeficiente de variação
+(CV) medem a estabilidade da importância entre as diferentes reamostragens.
+</div>',
+  dados$importancia_ensemble[1, Num_Modelos]
+  ))
+} else {
+  cat('<div class="alert alert-warning"><strong>ℹ️ Importância de modelo único</strong> — passe <code>ensemble_obj</code> para obter média e estabilidade entre modelos.</div>\n')
+}
+```
+
+```{r importance-plot}
+# Usa ensemble se disponível, senão modelo único
+if (!is.null(dados$importancia_ensemble)) {
+  n_feat  <- min(20L, nrow(dados$importancia_ensemble))
+  imp_plt <- dados$importancia_ensemble[seq_len(n_feat)]
+
+  ggplot(imp_plt, aes(x = reorder(Feature, Gain_media), y = Gain_media)) +
+    geom_col(fill = COR_ACCENT, alpha = 0.75, width = 0.7) +
+    geom_errorbar(aes(ymin = pmax(0, Gain_media - Gain_sd),
+                      ymax = Gain_media + Gain_sd),
+                  width = 0.3, color = "gray40", linewidth = 0.5) +
+    geom_text(aes(label = sprintf("%.4f", Gain_media)),
+              hjust = -0.15, size = 3.0, color = "gray30") +
+    coord_flip() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.22))) +
+    labs(title    = paste0("Top ", n_feat, " Features — Média do Ensemble"),
+         subtitle = "Barra de erro = ± 1 desvio padrão entre modelos",
+         x = NULL, y = "Gain médio") +
+    TEMA
+
+} else {
+  n_feat  <- min(20L, nrow(dados$importancia))
+  imp_plt <- dados$importancia[seq_len(n_feat)]
+
+  ggplot(imp_plt, aes(x = reorder(Feature, Gain), y = Gain)) +
+    geom_col(fill = COR_ACCENT, alpha = 0.85) +
+    geom_text(aes(label = sprintf("%.4f", Gain)), hjust = -0.1, size = 3.2) +
+    coord_flip() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
+    labs(title    = paste0("Top ", n_feat, " Features por Gain"),
+         subtitle = "Gain = contribuição média para a redução de impureza",
+         x = NULL, y = "Gain") +
+    TEMA
+}
+```
+
+```{r importance-table}
+if (!is.null(dados$importancia_ensemble)) {
+  n_feat <- min(20L, nrow(dados$importancia_ensemble))
+  imp_tbl <- dados$importancia_ensemble[seq_len(n_feat), .(
+    Feature,
+    `Gain Médio`  = round(Gain_media, 5),
+    `Gain DP`     = round(Gain_sd,    5),
+    `CV`          = round(Gain_cv,    4),
+    `N Modelos`   = Num_Modelos
+  )]
+  kable(imp_tbl, caption = paste0("Importância média das ", n_feat, " principais features (ensemble)"))
+
+} else {
+  n_feat <- min(20L, nrow(dados$importancia))
+  kable(dados$importancia[seq_len(n_feat),
+                           .(Feature,
+                             Gain      = round(Gain,      5),
+                             Cover     = round(Cover,     5),
+                             Frequency = round(Frequency, 5))],
+        caption = "Importância das 20 principais features (modelo único)")
+}
+```
+
+---
+
+## Parâmetros do Modelo
+
+```{r params-table}
+params_df <- data.frame(
+  Parâmetro = names(dados$params_modelo),
+  Valor     = as.character(unlist(dados$params_modelo)),
+  stringsAsFactors = FALSE
+)
+
+params_df <- rbind(
+  data.frame(Parâmetro = "nrounds",    Valor = as.character(dados$nrounds)),
+  data.frame(Parâmetro = "n_features", Valor = as.character(length(dados$features))),
+  params_df
+)
+
+if (!is.null(dados$importancia_ensemble)) {
+  params_df <- rbind(
+    params_df,
+    data.frame(Parâmetro = "n_modelos_ensemble",
+               Valor     = as.character(dados$importancia_ensemble[1, Num_Modelos]))
+  )
+}
+
+kable(params_df, align = c("l", "r"),
+      caption = "Configuração do modelo XGBoost")
+```
+
+```{r features-list}
+cat("**Features utilizadas:**\n\n")
+cat(paste(paste0("`", dados$features, "`"), collapse = " · "))
+```
+
+---
+
+*Relatório gerado com [statMancer](https://github.com/statMancer) — `r format(dados$data_geracao, "%Y")`*
+
 
 ```{r setup}
 #| include: false

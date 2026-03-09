@@ -29,6 +29,10 @@
 #' @param predicoes_teste    \code{data.table} com colunas \code{predito} e
 #'                           \code{var_target} (resultado do merge entre
 #'                           \code{xgb_predict()} e os targets do teste).
+#' @param ensemble_obj       Objeto retornado por \code{xgb_treino_ensemble()}.
+#'                           Quando fornecido, calcula a importância média de
+#'                           features em todos os modelos do ensemble.
+#'                           DEFAULT: \code{NULL}.
 #' @param caminho_saida      Caminho completo para salvar o \code{.rds}.
 #'                           DEFAULT: \code{"dados_relatorio.rds"}.
 #'
@@ -45,6 +49,7 @@ preparar_dados_relatorio <- function(titulo,
                                      busca_estatistica  = NULL,
                                      modelo_obj,
                                      predicoes_teste,
+                                     ensemble_obj       = NULL,
                                      caminho_saida      = "dados_relatorio.rds") {
 
   data.table::setDT(dt_treino)
@@ -86,6 +91,40 @@ preparar_dados_relatorio <- function(titulo,
   data.table::setDT(imp)
   imp <- imp[order(-Gain)]
 
+  # ── Importância ensemble (média sobre todos os modelos) ────────────────────
+  importancia_ensemble <- NULL
+  if (!is.null(ensemble_obj)) {
+    feat_names <- ensemble_obj$metadata$training_config$colunas_features
+    all_imp <- data.table::rbindlist(
+      lapply(ensemble_obj$modelos, function(m) {
+        i <- xgboost::xgb.importance(model = m, feature_names = feat_names)
+        data.table::setDT(i)
+        i
+      }),
+      idcol = "modelo_idx"
+    )
+    importancia_ensemble <- all_imp[, .(
+      Gain_media  = mean(Gain,       na.rm = TRUE),
+      Gain_sd     = stats::sd(Gain,  na.rm = TRUE),
+      Num_Modelos = .N
+    ), by = Feature]
+    importancia_ensemble[, Gain_cv := ifelse(
+      Gain_media > 0,
+      round(Gain_sd / Gain_media, 4),
+      NA_real_
+    )]
+    importancia_ensemble[, Gain_media := round(Gain_media, 6)]
+    importancia_ensemble[, Gain_sd    := round(Gain_sd,    6)]
+    importancia_ensemble <- importancia_ensemble[order(-Gain_media)]
+  }
+
+  # ── Métricas por corte ─────────────────────────────────────────────────────
+  metricas_cortes <- metricas_por_cortes(
+    predicoes_teste,
+    var_pred   = "predito",
+    var_target = var_target
+  )
+
   # ── Montar lista final ─────────────────────────────────────────────────────
   dados <- list(
     titulo             = titulo,
@@ -104,10 +143,12 @@ preparar_dados_relatorio <- function(titulo,
 
     busca_estatistica  = busca_estatistica,
 
-    metricas           = metricas,
-    tabela_decis       = tabela_d,
-    curva_roc          = curva_r,
-    importancia        = imp,
+    metricas              = metricas,
+    metricas_por_cortes   = metricas_cortes,
+    tabela_decis          = tabela_d,
+    curva_roc             = curva_r,
+    importancia           = imp,
+    importancia_ensemble  = importancia_ensemble,
 
     params_modelo      = modelo_obj$params,
     nrounds            = modelo_obj$nrounds,

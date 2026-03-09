@@ -348,6 +348,7 @@ preparar_dados_relatorio(
   busca_estatistica = busca,
   modelo_obj        = modelo_report,
   predicoes_teste   = dt_avaliacao,
+  ensemble_obj      = ensemble,
   caminho_saida     = dados_rds
 )
 
@@ -364,3 +365,4 @@ cat("║           Pipeline concluído com sucesso!           ║\n")
 cat("╚══════════════════════════════════════════════════════╝\n")
 cat(sprintf("   Relatório: %s\n\n",
             file.path(output_dir, "relatorio_modelo.html")))
+

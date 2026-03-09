@@ -244,5 +244,77 @@ test_roc_monotona()
 test_roc_perfeito()
 test_roc_estrutura()
 
+
+# ── METRICAS_POR_CORTES ───────────────────────────────────────────────────────
+cat("--- metricas_por_cortes() ---\n")
+
+# M1: retorna data.table com uma linha por corte (7 cortes padrão)
+test_cortes_n_linhas <- function() {
+  res <- metricas_por_cortes(dt_grande, var_pred = "predito", var_target = "target")
+  .assert(data.table::is.data.table(res), "Resultado deve ser data.table")
+  .assert(nrow(res) == 7L,
+          paste0("Default deve ter 7 linhas (uma por corte), got ", nrow(res)))
+  cat("PASS: test_cortes_n_linhas\n\n")
+}
+
+# M2: colunas obrigatórias presentes
+test_cortes_colunas <- function() {
+  res  <- metricas_por_cortes(dt_grande, var_pred = "predito", var_target = "target")
+  cols <- c("corte", "precision", "recall", "f1", "accuracy", "specificity",
+            "tp", "tn", "fp", "fn")
+  ausentes <- setdiff(cols, names(res))
+  .assert(length(ausentes) == 0L,
+          paste0("Colunas ausentes: ", paste(ausentes, collapse = ", ")))
+  cat("PASS: test_cortes_colunas\n\n")
+}
+
+# M3: corte 0.5 produz as mesmas métricas que metricas_binario()
+test_cortes_iguais_binario_em_050 <- function() {
+  mb  <- metricas_binario(dt_grande, var_pred = "predito", var_target = "target")
+  mpc <- metricas_por_cortes(dt_grande, var_pred = "predito", var_target = "target")
+  r   <- mpc[corte == 0.5]
+  .assert(nrow(r) == 1L, "Deve existir linha para corte=0.5")
+  .assert(abs(r$precision - mb$precision) < 1e-6,
+          paste0("precision corte=0.5 deve igualar metricas_binario: ",
+                 r$precision, " vs ", mb$precision))
+  .assert(abs(r$recall - mb$recall) < 1e-6,
+          paste0("recall corte=0.5 deve igualar metricas_binario: ",
+                 r$recall, " vs ", mb$recall))
+  .assert(abs(r$accuracy - mb$accuracy) < 1e-6,
+          paste0("accuracy corte=0.5 deve igualar metricas_binario: ",
+                 r$accuracy, " vs ", mb$accuracy))
+  cat("PASS: test_cortes_iguais_binario_em_050\n\n")
+}
+
+# M4: cortes e métricas em ranges válidos
+test_cortes_ranges <- function() {
+  res <- metricas_por_cortes(dt_grande, var_pred = "predito", var_target = "target")
+  .assert(all(res$corte        >= 0 & res$corte        <= 1), "cortes em [0,1]")
+  .assert(all(res$precision    >= 0 & res$precision    <= 1), "precision em [0,1]")
+  .assert(all(res$recall       >= 0 & res$recall       <= 1), "recall em [0,1]")
+  .assert(all(res$f1           >= 0 & res$f1           <= 1), "f1 em [0,1]")
+  .assert(all(res$accuracy     >= 0 & res$accuracy     <= 1), "accuracy em [0,1]")
+  .assert(all(res$specificity  >= 0 & res$specificity  <= 1), "specificity em [0,1]")
+  cat("PASS: test_cortes_ranges\n\n")
+}
+
+# M5: cortes customizados retornam número correto de linhas
+test_cortes_customizados <- function() {
+  cortes_custom <- c(0.2, 0.4, 0.6, 0.8)
+  res <- metricas_por_cortes(dt_grande, var_pred = "predito", var_target = "target",
+                             cortes = cortes_custom)
+  .assert(nrow(res) == 4L,
+          paste0("Deve ter 4 linhas para os 4 cortes customizados, got ", nrow(res)))
+  .assert(all(sort(res$corte) == sort(cortes_custom)),
+          "Cortes no resultado devem ser exatamente os customizados")
+  cat("PASS: test_cortes_customizados\n\n")
+}
+
+test_cortes_n_linhas()
+test_cortes_colunas()
+test_cortes_iguais_binario_em_050()
+test_cortes_ranges()
+test_cortes_customizados()
+
 cat("====================================\n")
 cat("✅ Todos os testes de reporting_metrics passaram!\n\n")

@@ -41,7 +41,10 @@ suppressPackageStartupMessages({
 )
 
 source(file.path(.proj_root, "R", "utils",     "utils_categoricas.R"))
+source(file.path(.proj_root, "R", "utils",     "utils_modelagem.R"))
+source(file.path(.proj_root, "R", "sampling",  "sampling_balance.R"))
 source(file.path(.proj_root, "R", "modeling",   "modeling_xgb_train.R"))
+source(file.path(.proj_root, "R", "modeling",   "modeling_xgb_ensemble.R"))
 source(file.path(.proj_root, "R", "reporting",  "reporting_metrics.R"))
 source(file.path(.proj_root, "R", "reporting",  "reporting_render.R"))
 source(file.path(.proj_root, "tests", "helpers", "synthetic_data.R"))
@@ -93,6 +96,30 @@ set.seed(42)
 source(file.path(.proj_root, "R", "modeling", "modeling_xgb_predict.R"))
 .preds_raw <- xgb_predict(.modelo_obj, .dt_te, var_id = "id")
 .predicoes <- merge(.preds_raw, .dt_te[, .(id, target)], by = "id")
+
+# Ensemble pequeno (3 modelos) para testes de importância ensemble
+.ensemble_obj <- xgb_treino_ensemble(
+  dt                  = data.table::copy(.dt_tr),
+  var_id              = "id",
+  var_target          = "target",
+  vars_excluir        = "regiao",
+  parametros_treino   = list(
+    parametros = list(
+      objective        = "binary:logistic",
+      eval_metric      = "auc",
+      eta              = 0.15,
+      max_leaves       = 8L,
+      subsample        = 0.8,
+      colsample_bytree = 0.8,
+      grow_policy      = "lossguide",
+      tree_method      = "hist"
+    ),
+    nrounds = 15L
+  ),
+  n_models            = 3L,
+  metodo_reamostragem = "bootstrap",
+  nthreads            = 1L
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -294,6 +321,115 @@ test_preparar_curva_roc_extremos()
 test_preparar_importancia_estrutura()
 test_preparar_cria_diretorio()
 test_preparar_erro_target_ausente()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ensemble importance + metricas_por_cortes em preparar_dados_relatorio()
+# ─────────────────────────────────────────────────────────────────────────────
+cat("--- ensemble importance / metricas_por_cortes ---\n")
+
+# T16: importancia_ensemble é NULL quando ensemble_obj não é passado
+test_ensemble_imp_null_sem_ensemble <- function() {
+  tmp_rds <- tempfile(fileext = ".rds")
+  on.exit(if (file.exists(tmp_rds)) unlink(tmp_rds))
+
+  preparar_dados_relatorio(
+    titulo          = "T16",
+    dt_treino       = data.table::copy(.dt_tr),
+    dt_teste        = data.table::copy(.dt_te),
+    var_target      = "target",
+    modelo_obj      = .modelo_obj,
+    predicoes_teste = data.table::copy(.predicoes),
+    caminho_saida   = tmp_rds
+  )
+  dados <- readRDS(tmp_rds)
+  .assert(is.null(dados$importancia_ensemble),
+          "importancia_ensemble deve ser NULL quando ensemble_obj não é passado")
+  cat("PASS: test_ensemble_imp_null_sem_ensemble\n\n")
+}
+
+# T17: importancia_ensemble é data.table com colunas corretas quando ensemble passado
+test_ensemble_imp_estrutura <- function() {
+  tmp_rds <- tempfile(fileext = ".rds")
+  on.exit(if (file.exists(tmp_rds)) unlink(tmp_rds))
+
+  preparar_dados_relatorio(
+    titulo          = "T17",
+    dt_treino       = data.table::copy(.dt_tr),
+    dt_teste        = data.table::copy(.dt_te),
+    var_target      = "target",
+    modelo_obj      = .modelo_obj,
+    predicoes_teste = data.table::copy(.predicoes),
+    ensemble_obj    = .ensemble_obj,
+    caminho_saida   = tmp_rds
+  )
+  dados <- readRDS(tmp_rds)
+  imp   <- dados$importancia_ensemble
+
+  .assert(!is.null(imp),                       "importancia_ensemble não deve ser NULL")
+  .assert(data.table::is.data.table(imp),      "importancia_ensemble deve ser data.table")
+  .assert("Feature"    %in% names(imp),        "Deve ter coluna Feature")
+  .assert("Gain_media" %in% names(imp),        "Deve ter coluna Gain_media")
+  .assert("Gain_sd"    %in% names(imp),        "Deve ter coluna Gain_sd")
+  .assert("Gain_cv"    %in% names(imp),        "Deve ter coluna Gain_cv")
+  .assert("Num_Modelos" %in% names(imp),       "Deve ter coluna Num_Modelos")
+  .assert(all(imp$Gain_media >= 0),            "Gain_media deve ser >= 0")
+  .assert(imp[1, Gain_media] >= imp[.N, Gain_media],
+          "Deve estar ordenado por Gain_media decrescente")
+  cat("PASS: test_ensemble_imp_estrutura\n\n")
+}
+
+# T18: metricas_por_cortes está presente no RDS e é data.table
+test_metricas_por_cortes_no_rds <- function() {
+  tmp_rds <- tempfile(fileext = ".rds")
+  on.exit(if (file.exists(tmp_rds)) unlink(tmp_rds))
+
+  preparar_dados_relatorio(
+    titulo          = "T18",
+    dt_treino       = data.table::copy(.dt_tr),
+    dt_teste        = data.table::copy(.dt_te),
+    var_target      = "target",
+    modelo_obj      = .modelo_obj,
+    predicoes_teste = data.table::copy(.predicoes),
+    caminho_saida   = tmp_rds
+  )
+  dados <- readRDS(tmp_rds)
+  mpc   <- dados$metricas_por_cortes
+
+  .assert(!is.null(mpc),                  "metricas_por_cortes não deve ser NULL")
+  .assert(data.table::is.data.table(mpc), "metricas_por_cortes deve ser data.table")
+  .assert(nrow(mpc) >= 3L,               "Deve ter pelo menos 3 linhas (cortes)")
+  cat("PASS: test_metricas_por_cortes_no_rds\n\n")
+}
+
+# T19: metricas_por_cortes tem colunas obrigatórias
+test_metricas_por_cortes_colunas <- function() {
+  tmp_rds <- tempfile(fileext = ".rds")
+  on.exit(if (file.exists(tmp_rds)) unlink(tmp_rds))
+
+  preparar_dados_relatorio(
+    titulo          = "T19",
+    dt_treino       = data.table::copy(.dt_tr),
+    dt_teste        = data.table::copy(.dt_te),
+    var_target      = "target",
+    modelo_obj      = .modelo_obj,
+    predicoes_teste = data.table::copy(.predicoes),
+    caminho_saida   = tmp_rds
+  )
+  dados <- readRDS(tmp_rds)
+  mpc   <- dados$metricas_por_cortes
+  cols  <- c("corte", "precision", "recall", "f1", "accuracy", "specificity")
+  ausentes <- setdiff(cols, names(mpc))
+  .assert(length(ausentes) == 0L,
+          paste0("Colunas ausentes em metricas_por_cortes: ",
+                 paste(ausentes, collapse = ", ")))
+  cat("PASS: test_metricas_por_cortes_colunas\n\n")
+}
+
+test_ensemble_imp_null_sem_ensemble()
+test_ensemble_imp_estrutura()
+test_metricas_por_cortes_no_rds()
+test_metricas_por_cortes_colunas()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

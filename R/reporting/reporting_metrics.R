@@ -216,3 +216,58 @@ curva_roc <- function(dt, var_pred, var_target) {
        precision = precision, recall = recall,
        f1 = f1, accuracy = accuracy)
 }
+
+
+# ─── metricas_por_cortes ─────────────────────────────────────────────────────
+
+#' @title Métricas de classificação por múltiplos cortes
+#'
+#' @description Calcula métricas de classificação (precision, recall, F1,
+#' accuracy, specificity, matriz de confusão) para cada threshold em
+#' \code{cortes}. Útil para análise de sensibilidade do modelo.
+#'
+#' @param dt         \code{data.table} com predições e target.
+#' @param var_pred   Nome da coluna de scores preditos (0–1).
+#' @param var_target Nome da coluna target binário (0/1).
+#' @param cortes     Vetor numérico de thresholds. DEFAULT:
+#'                   \code{c(0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)}.
+#'
+#' @return \code{data.table} com uma linha por corte e colunas:
+#'   \code{corte}, \code{precision}, \code{recall}, \code{f1},
+#'   \code{accuracy}, \code{specificity}, \code{tp}, \code{tn},
+#'   \code{fp}, \code{fn}.
+#'
+#' @import data.table
+#' @export
+metricas_por_cortes <- function(dt, var_pred, var_target,
+                                cortes = c(0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)) {
+
+  data.table::setDT(dt)
+
+  if (!var_pred %in% names(dt))
+    stop(paste0("Coluna de predição '", var_pred, "' não encontrada."))
+  if (!var_target %in% names(dt))
+    stop(paste0("Coluna target '", var_target, "' não encontrada."))
+
+  scores <- as.numeric(dt[[var_pred]])
+  labels <- as.integer(dt[[var_target]])
+
+  rows <- lapply(cortes, function(c) {
+    cm <- .confusion_at_threshold(scores, labels, threshold = c)
+    specificity <- if ((cm$tn + cm$fp) > 0L) cm$tn / (cm$tn + cm$fp) else 0
+    data.table::data.table(
+      corte       = c,
+      precision   = round(cm$precision,   4),
+      recall      = round(cm$recall,      4),
+      f1          = round(cm$f1,          4),
+      accuracy    = round(cm$accuracy,    4),
+      specificity = round(specificity,    4),
+      tp          = cm$tp,
+      tn          = cm$tn,
+      fp          = cm$fp,
+      fn          = cm$fn
+    )
+  })
+
+  data.table::rbindlist(rows)
+}
