@@ -692,7 +692,7 @@ gerar_parametros_estocasticos <- function(parametros_base) {
   }
   
   if("colsample_bytree" %in% names(params)) {
-    params$colsample_bytree <- rnorm_t(n = 1, mu = params$colsample_bytree, sd = 0.4, lower = 0.1, upper = 1)
+    params$colsample_bytree <- rnorm_t(n = 1, mu = params$colsample_bytree, sd = 0.4, lower = 0.1, upper = 0.5)
   }
   
   if("min_child_weight" %in% names(params)) {
@@ -1744,7 +1744,7 @@ busca_parametros_amostra_pequena <- function(dados,
     max_leaves = 64,
     gamma = 0.1,
     subsample = 0.8,
-    colsample_bytree = 0.8,
+    colsample_bytree = 0.4,
     min_child_weight = 1,
     grow_policy = "lossguide",
     tree_method = "hist"

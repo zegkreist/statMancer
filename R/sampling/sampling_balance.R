@@ -27,8 +27,14 @@
 #' @param var_id        Nome da coluna de identificação única (character).
 #' @param var_target    Nome da coluna target (character). Deve ter um valor
 #'                      único por ID.
-#' @param n_por_classe  Número de IDs amostrados por classe. DEFAULT: tamanho
-#'                      da classe majoritária (balanceia sem perda de dados).
+#' @param n_por_classe  Número de IDs amostrados por classe. Mutuamente
+#'                      exclusivo com \code{prop_target}. DEFAULT: tamanho da
+#'                      classe majoritária (balanceia sem perda de dados).
+#' @param prop_target   Proporção desejada da classe minoritária no resultado
+#'                      final (e.g. \code{0.5} para 50/50). Calcula
+#'                      \code{n_por_classe} automaticamente a partir do
+#'                      tamanho da classe majoritária. Mutuamente exclusivo
+#'                      com \code{n_por_classe}. DEFAULT: \code{NULL}.
 #' @param var_estratificacao  Vetor de nomes de colunas para estratificação
 #'                            proporcional dentro de cada classe.
 #'                            DEFAULT: \code{NULL}.
@@ -42,6 +48,7 @@ upsample <- function(dt,
                      var_id,
                      var_target,
                      n_por_classe       = NULL,
+                     prop_target        = NULL,
                      var_estratificacao = NULL,
                      seed               = NULL) {
 
@@ -66,6 +73,15 @@ upsample <- function(dt,
 
   # Número de IDs por classe
   contagem_classes <- dt_ids[, .N, by = var_target]
+
+  if (!is.null(prop_target)) {
+    if (!is.null(n_por_classe))
+      stop("Forneça apenas um de 'n_por_classe' ou 'prop_target', não ambos.")
+    if (prop_target <= 0 || prop_target >= 1)
+      stop("'prop_target' deve estar entre 0 e 1 (exclusive).")
+    n_maj        <- max(contagem_classes$N)
+    n_por_classe <- as.integer(round(prop_target * n_maj / (1 - prop_target)))
+  }
 
   if (is.null(n_por_classe))
     n_por_classe <- max(contagem_classes$N)

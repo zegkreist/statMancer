@@ -49,12 +49,14 @@ preparar_dados_relatorio <- function(titulo,
                                      busca_estatistica  = NULL,
                                      modelo_obj,
                                      predicoes_teste,
+                                     predicoes_treino   = NULL,
                                      ensemble_obj       = NULL,
                                      caminho_saida      = "dados_relatorio.rds") {
 
   data.table::setDT(dt_treino)
   data.table::setDT(dt_teste)
   data.table::setDT(predicoes_teste)
+  if (!is.null(predicoes_treino)) data.table::setDT(predicoes_treino)
 
   # ── Distribuição do target (normaliza nome da coluna para "target") ────────
   dist_treino <- dt_treino[, .N, by = eval(var_target)]
@@ -65,10 +67,26 @@ preparar_dados_relatorio <- function(titulo,
   data.table::setnames(dist_teste, var_target, "target")
   dist_teste[, prop := round(N / sum(N), 4)]
 
-  # ── Métricas ───────────────────────────────────────────────────────────────
+  # ── Métricas (teste) ──────────────────────────────────────────────────────
   metricas <- metricas_binario(predicoes_teste,
                                var_pred   = "predito",
                                var_target = var_target)
+
+  # ── Métricas (treino) — para diagnóstico de overfitting ───────────────────
+  metricas_treino <- NULL
+  curva_roc_treino <- NULL
+  tabela_decis_treino <- NULL
+  if (!is.null(predicoes_treino)) {
+    metricas_treino <- metricas_binario(predicoes_treino,
+                                        var_pred   = "predito",
+                                        var_target = var_target)
+    curva_roc_treino <- curva_roc(predicoes_treino,
+                                  var_pred   = "predito",
+                                  var_target = var_target)
+    tabela_decis_treino <- tabela_decis(predicoes_treino,
+                                        var_pred   = "predito",
+                                        var_target = var_target)
+  }
 
   # ── Tabela de decis ────────────────────────────────────────────────────────
   tabela_d <- tabela_decis(predicoes_teste,
@@ -155,7 +173,11 @@ preparar_dados_relatorio <- function(titulo,
     features           = modelo_obj$features,
     var_target         = var_target,
 
-    predicoes          = predicoes_teste
+    predicoes          = predicoes_teste,
+    predicoes_treino   = predicoes_treino,
+    metricas_treino    = metricas_treino,
+    curva_roc_treino   = curva_roc_treino,
+    tabela_decis_treino = tabela_decis_treino
   )
 
   dir_saida <- dirname(caminho_saida)

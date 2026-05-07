@@ -474,6 +474,155 @@ if (!is.null(dados$importancia_ensemble)) {
 
 ---
 
+## Treino vs Teste — Diagnóstico de Overfitting
+
+```{r overfit-check}
+#| output: asis
+if (!is.null(dados$metricas_treino)) {
+  m_tr <- dados$metricas_treino
+  m_te <- dados$metricas
+
+  delta_auc  <- m_tr$auc  - m_te$auc
+  delta_ks   <- m_tr$ks   - m_te$ks
+  delta_gini <- m_tr$gini - m_te$gini
+
+  # Classifica risco de overfitting pelo delta AUC
+  overfit_class <- if (delta_auc > 0.10) "alert-danger"
+                   else if (delta_auc > 0.05) "alert-warning"
+                   else "alert-success"
+  overfit_label <- if (delta_auc > 0.10) "⚠️ Overfitting severo"
+                   else if (delta_auc > 0.05) "🔶 Overfitting moderado"
+                   else "✅ Generalização adequada"
+
+  cat(sprintf('
+<div class="alert %s">
+<strong>🔍 Diagnóstico de Overfitting — %s</strong><br>
+<small>ΔAUC = Treino − Teste. Valores acima de 0.05 indicam risco; acima de 0.10, overfitting severo.</small><br><br>
+<table style="width:100%%;border:none">
+<thead>
+<tr>
+  <th style="text-align:left">Métrica</th>
+  <th style="text-align:right">Treino</th>
+  <th style="text-align:right">Teste</th>
+  <th style="text-align:right">Δ (Treino − Teste)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>AUC</strong></td>
+  <td style="text-align:right">%.4f</td>
+  <td style="text-align:right">%.4f</td>
+  <td style="text-align:right"><strong>%+.4f</strong></td>
+</tr>
+<tr>
+  <td><strong>KS</strong></td>
+  <td style="text-align:right">%.4f</td>
+  <td style="text-align:right">%.4f</td>
+  <td style="text-align:right">%+.4f</td>
+</tr>
+<tr>
+  <td><strong>Gini</strong></td>
+  <td style="text-align:right">%.4f</td>
+  <td style="text-align:right">%.4f</td>
+  <td style="text-align:right">%+.4f</td>
+</tr>
+</tbody>
+</table>
+</div>',
+    overfit_class, overfit_label,
+    m_tr$auc,  m_te$auc,  delta_auc,
+    m_tr$ks,   m_te$ks,   delta_ks,
+    m_tr$gini, m_te$gini, delta_gini
+  ))
+} else {
+  cat('<div class="alert alert-info">ℹ️ Predições no conjunto de treino não disponíveis — passe <code>predicoes_treino</code> para habilitar o diagnóstico de overfitting.</div>\n')
+}
+```
+
+```{r overfit-roc}
+if (!is.null(dados$curva_roc_treino)) {
+  roc_tr <- data.table::copy(dados$curva_roc_treino)
+  roc_te <- data.table::copy(dados$curva_roc)
+  roc_tr[, conjunto := "Treino"]
+  roc_te[, conjunto := "Teste"]
+  roc_all <- rbind(roc_tr, roc_te)
+
+  labels_roc <- c(
+    sprintf("Treino (AUC=%.4f)", dados$metricas_treino$auc),
+    sprintf("Teste  (AUC=%.4f)", dados$metricas$auc)
+  )
+  names(labels_roc) <- c("Treino", "Teste")
+
+  ggplot(roc_all, aes(x = fpr, y = tpr, color = conjunto, linetype = conjunto)) +
+    geom_line(linewidth = 1.1) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dotted", color = "gray60") +
+    scale_color_manual(values = c("Treino" = COR_ACCENT, "Teste" = COR_POS),
+                       labels = labels_roc, name = NULL) +
+    scale_linetype_manual(values = c("Treino" = "dashed", "Teste" = "solid"),
+                          labels = labels_roc, name = NULL) +
+    scale_x_continuous(labels = scales::percent_format()) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    labs(title    = "Curva ROC — Treino vs Teste",
+         subtitle = "Sobreposição elevada = boa generalização; lacuna grande = overfitting",
+         x = "Taxa de Falsos Positivos (FPR)",
+         y = "Taxa de Verdadeiros Positivos (TPR)") +
+    coord_equal() +
+    TEMA
+}
+```
+
+```{r overfit-score-dist}
+if (!is.null(dados$predicoes_treino)) {
+  pr_tr <- data.table::copy(dados$predicoes_treino)
+  pr_te <- data.table::copy(dados$predicoes)
+  pr_tr[, conjunto := "Treino"]
+  pr_te[, conjunto := "Teste"]
+
+  # Garante coluna target numérica
+  pr_tr[, target_num := as.integer(get(dados$var_target))]
+  pr_te[, target_num := as.integer(get(dados$var_target))]
+
+  scores_all <- rbind(
+    pr_tr[, .(predito, conjunto, classe = factor(target_num, labels = c("Neg (0)", "Pos (1)")))],
+    pr_te[, .(predito, conjunto, classe = factor(target_num, labels = c("Neg (0)", "Pos (1)")))]
+  )
+
+  ggplot(scores_all, aes(x = predito, fill = classe, color = classe)) +
+    geom_density(alpha = 0.35, linewidth = 0.8) +
+    facet_wrap(~conjunto, ncol = 2) +
+    scale_fill_manual(values  = c("Neg (0)" = COR_NEG, "Pos (1)" = COR_POS), name = "Classe") +
+    scale_color_manual(values = c("Neg (0)" = COR_NEG, "Pos (1)" = COR_POS), guide = "none") +
+    labs(title    = "Distribuição dos Scores — Treino vs Teste",
+         subtitle = "Perfis similares indicam boa generalização; separação muito maior no treino = overfitting",
+         x = "Score predito", y = "Densidade") +
+    TEMA
+}
+```
+
+```{r overfit-lift}
+if (!is.null(dados$tabela_decis_treino)) {
+  dec_tr <- data.table::copy(dados$tabela_decis_treino)
+  dec_te <- data.table::copy(dados$tabela_decis)
+  dec_tr[, conjunto := "Treino"]
+  dec_te[, conjunto := "Teste"]
+  dec_all <- rbind(dec_tr, dec_te)
+
+  ggplot(dec_all, aes(x = decil, y = lift, color = conjunto, shape = conjunto)) +
+    geom_line(linewidth = 1.0) +
+    geom_point(size = 3) +
+    geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
+    scale_x_continuous(breaks = 1:10) +
+    scale_color_manual(values = c("Treino" = COR_ACCENT, "Teste" = COR_POS), name = NULL) +
+    scale_shape_manual(values = c("Treino" = 17, "Teste" = 16), name = NULL) +
+    labs(title    = "Lift por Decil — Treino vs Teste",
+         subtitle = "Linha tracejada = lift = 1 (sem discriminação). Queda grande entre treino e teste indica overfitting",
+         x = "Decil (1 = maior score)", y = "Lift") +
+    TEMA
+}
+```
+
+---
+
 ## Parâmetros do Modelo
 
 ```{r params-table}
